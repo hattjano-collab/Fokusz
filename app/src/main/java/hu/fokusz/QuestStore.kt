@@ -82,7 +82,7 @@ object QuestStore {
         if (s.getString("day", "") == today) return
         s.edit()
             .putString("day", today)
-            .putInt("pushTarget", if (random.nextBoolean()) 10 else 20)
+            .putInt("pushTarget", if (s.contains("pushTarget")) { if (s.getInt("pushTarget", 10) == 10) 20 else 10 } else { if (random.nextBoolean()) 10 else 20 })
             .putBoolean("chessDone", false)
             .putBoolean("pushDone", false)
             .putString("active", NONE)
@@ -93,6 +93,7 @@ object QuestStore {
             .putInt("skips", 0)
             .putBoolean("customUsed", false)
             .putString("customName", "")
+            .putString("replacedStarter", "")
             .putInt("completed", 0)
             .putString("result", "")
             .remove("extraId")
@@ -202,8 +203,7 @@ object QuestStore {
         val old = active(c)
         val e = sp(c).edit().putBoolean("customUsed", true)
             .putString("customName", name.trim())
-        if (old == CHESS) e.putBoolean("chessDone", true)
-        if (old == PUSH) e.putBoolean("pushDone", true)
+            .putString("replacedStarter", old)
         e.commit()
         setActive(c, CUSTOM)
         return true
@@ -220,6 +220,12 @@ object QuestStore {
             .putString("result", "Kihagyva –5 percért. Jutalom nem jár.")
         if (active == CHESS) e.putBoolean("chessDone", true)
         if (active == PUSH) e.putBoolean("pushDone", true)
+        if (active == CUSTOM) {
+            when (s.getString("replacedStarter", "")) {
+                CHESS -> e.putBoolean("chessDone", true)
+                PUSH -> e.putBoolean("pushDone", true)
+            }
+        }
         e.commit()
         return true
     }
@@ -275,6 +281,12 @@ object QuestStore {
             .putString("result", result)
         if (a == CHESS) e.putBoolean("chessDone", true)
         if (a == PUSH) e.putBoolean("pushDone", true)
+        if (a == CUSTOM) {
+            when (sp(c).getString("replacedStarter", "")) {
+                CHESS -> e.putBoolean("chessDone", true)
+                PUSH -> e.putBoolean("pushDone", true)
+            }
+        }
         e.commit()
         Store.add(c, reward)
         return true
