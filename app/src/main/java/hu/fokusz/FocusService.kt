@@ -95,8 +95,11 @@ class FocusService : Service() {
             }
         }
         lastEventTime = recentTime
-        if (currentPackage in Store.BLOCKED) {
-            if (QuestStore.isTimerLocked(this)) {
+        val questLocked = QuestStore.isTimerLocked(this)
+        val customBrowserLocked = QuestStore.isCustomTimerLocked(this) && currentPackage in Store.BROWSERS
+        if (currentPackage in Store.BLOCKED || (questLocked && currentPackage in Store.QUEST_SOCIAL)
+            || customBrowserLocked) {
+            if (questLocked) {
                 showCover(true)
             } else {
                 if (Store.bal(this) > 0) Store.add(this, -1)
