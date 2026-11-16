@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "hu.fokusz"
     compileSdk = 35
-    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "1.0" }
+    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "1.1" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

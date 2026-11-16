@@ -3,6 +3,7 @@ package hu.fokusz
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.net.Uri
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,7 +39,7 @@ fun value(h: List<Int>): Int {
 fun rv(c: Int) = minOf(c % 13 + 1, 10)
 fun name(c: Int) = listOf("A","2","3","4","5","6","7","8","9","10","J","Q","K")[c % 13] + "♠♥♦♣"[c / 13]
 fun fmt(sec: Int) = if (sec % 60 == 0) "${sec / 60}" else "%.1f".format(sec / 60f)
-fun enabled(c: Context) = (Settings.Secure.getString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains(c.packageName)
+fun enabled(c: Context) = UsageGuard.allowed(c)
 
 data class Hand(val cards: List<Int>, val bet: Int, val done: Boolean = false, val ace: Boolean = false, val res: String = "")
 
@@ -52,14 +53,16 @@ class MainActivity : ComponentActivity() {
 @Composable fun App() {
     val ctx = LocalContext.current
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
-    var on by remember { mutableStateOf(enabled(ctx)) }
+    var on by remember { mutableStateOf(FocusService.isRunning) }
+    var usageOk by remember { mutableStateOf(UsageGuard.allowed(ctx)) }
+    var overlayOk by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var stake by remember { mutableStateOf(5) }
     var msg by remember { mutableStateOf("") }
     var hands by remember { mutableStateOf(listOf<Hand>()) }
     var d by remember { mutableStateOf(listOf<Int>()) }
     var act by remember { mutableStateOf(0) }
     var live by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { while (true) { bal = Store.bal(ctx); on = enabled(ctx); delay(1000) } }
+    LaunchedEffect(Unit) { while (true) { bal = Store.bal(ctx); on = FocusService.isRunning; usageOk = UsageGuard.allowed(ctx); overlayOk = Settings.canDrawOverlays(ctx); delay(1000) } }
     val canBet = !live && bal / 60 >= stake
 
     fun dealerPlay(hs: List<Hand>) {
@@ -138,10 +141,35 @@ class MainActivity : ComponentActivity() {
         Text("🔒 Fókusz", fontSize = 22.sp)
         Text("%d:%02d".format(bal / 60, bal % 60), fontSize = 56.sp)
         Text("Mai időkeret a figyelemelterelő appokra. Minden nap 30 percet kapsz.")
-        if (!on) {
-            Text("⚠️ A védelem ki van kapcsolva!")
-            Button(onClick = { ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Bekapcsolás") }
+        Text("A Fókusz kizárólag ezen a telefonon ellenőrzi az apphasználatot.")
+        if (!usageOk) {
+            Text("1. lépés: engedélyezd a használati adatok elérését.")
+            Button(onClick = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) {
+                Text("Használati adatok engedélyezése")
+            }
         }
+        if (!overlayOk) {
+            Text("2. lépés: engedélyezd a megjelenítést más alkalmazások felett, hogy a Fókusz eltakarhassa a lejárt appokat.")
+            Button(onClick = {
+                ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName)))
+            }) { Text("Megjelenítés más appok felett") }
+        }
+        if (usageOk && overlayOk) {
+            if (on) {
+                Text("✅ A védelem aktív. A háttérben futó Fókusz értesítést mutat.")
+                OutlinedButton(onClick = { ctx.stopService(Intent(ctx, FocusService::class.java)); on = false }) {
+                    Text("Védelem leállítása")
+                }
+            } else {
+                Text("⚠️ A védelem még nem fut.")
+                Button(onClick = {
+                    try { ctx.startForegroundService(Intent(ctx, FocusService::class.java)); on = true }
+                    catch (e: Exception) { msg = "Nem sikerült elindítani: " + (e.message ?: "ismeretlen hiba") }
+                }) { Text("Védelem elindítása") }
+            }
+        }
+        Text("A háttérben működő védelemhez a Xiaomi akkumulátorkímélőjében engedélyezd a korlátozás nélküli működést.")
+
         Text("Tét (perc):")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(1, 5, 10, 15).forEach { v ->
