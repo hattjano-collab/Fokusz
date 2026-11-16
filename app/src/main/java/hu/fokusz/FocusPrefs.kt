@@ -88,7 +88,7 @@ object FocusPrefs {
         focus(c).edit().putInt("phase", 2).commit()
         val reward = focusTarget(c) / 3
         Store.add(c, reward)
-        ProgressStore.taskFinished(c, "TIMED", focusTarget(c), reward)
+        ProgressStore.taskFinished(c, "STUDY", focusTarget(c), reward)
         return true
     }
     @Synchronized fun clearFocus(c: Context) {
