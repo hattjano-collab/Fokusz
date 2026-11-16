@@ -6,6 +6,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -58,6 +62,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -68,6 +74,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
 import java.security.SecureRandom
 import java.util.Locale
 import kotlin.math.abs
@@ -272,6 +279,8 @@ class MainActivity : ComponentActivity() {
     var coinWon by remember { mutableStateOf<Boolean?>(null) }
     var coinFlipping by remember { mutableStateOf(false) }
     var flipCounter by remember { mutableStateOf(0) }
+    val coinRotation = remember { Animatable(0f) }
+    val coinLift = remember { Animatable(0f) }
 
     var bjMessage by remember { mutableStateOf("Válassz tétet, majd kezdj egy új kört.") }
     var hands by remember { mutableStateOf(listOf<Hand>()) }
@@ -291,7 +300,17 @@ class MainActivity : ComponentActivity() {
 
     LaunchedEffect(flipCounter) {
         if (flipCounter > 0) {
-            delay(550)
+            coinRotation.snapTo(0f)
+            coinLift.snapTo(0f)
+            coroutineScope {
+                launch {
+                    coinRotation.animateTo(1800f, tween(durationMillis=1580, easing=LinearEasing))
+                }
+                launch {
+                    coinLift.animateTo(-120f, tween(durationMillis=730, easing=FastOutSlowInEasing))
+                    coinLift.animateTo(0f, tween(durationMillis=850, easing=FastOutSlowInEasing))
+                }
+            }
             coinFlipping = false
         }
     }
@@ -535,19 +554,29 @@ class MainActivity : ComponentActivity() {
                 }
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                     Box(
-                        Modifier.size(118.dp).clip(CircleShape)
-                            .background(Brush.radialGradient(listOf(Color(0xFFFFE6AF), Gold, Color(0xFFBD8649))))
+                        Modifier.size(118.dp)
+                            .graphicsLayer {
+                                rotationY = coinRotation.value % 360f
+                                translationY = coinLift.value.dp.toPx()
+                                cameraDistance = 12.dp.toPx()
+                            }
+                            .shadow(18.dp,CircleShape)
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(Color(0xFFFFF1CB), Gold, Color(0xFFB97834))))
                             .border(5.dp, Color(0xFF8E643B), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            if (coinFlipping) "◈" else if (coinResult == "Fej") "F" else if (coinResult == "Írás") "Í" else "↻",
+                            if (coinFlipping) {
+                                if ((coinRotation.value / 180f).toInt() % 2 == 0) "F" else "Í"
+                            } else if (coinResult == "Fej") "F"
+                            else if (coinResult == "Írás") "Í" else "↻",
                             color = Color(0xFF513624), fontSize = 55.sp, fontWeight = FontWeight.Black
                         )
                     }
                 }
                 Text(
-                    if (coinFlipping) "PÖRÖG AZ ÉRME…" else if (coinResult.isEmpty()) "FEJ VAGY ÍRÁS?" else "Eredmény: " + coinResult,
+                    if (coinFlipping) "FELDOBTAD AZ ÉRMÉT…" else if (coinResult.isEmpty()) "FEJ VAGY ÍRÁS?" else "Eredmény: " + coinResult,
                     modifier = Modifier.fillMaxWidth(), color = White, fontSize = 18.sp,
                     fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
                 )
