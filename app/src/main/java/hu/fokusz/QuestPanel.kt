@@ -28,6 +28,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,6 +120,11 @@ private val QLILAC = Color(0xFFB9AAFF)
     var customEditing by remember { mutableStateOf(false) }
     var customTitle by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    var chessUser by remember { mutableStateOf(ChessVerifier.username(ctx)) }
+    var chessPlatform by remember { mutableStateOf(ChessVerifier.platform(ctx)) }
+    var chessChecking by remember { mutableStateOf(false) }
+    var chessMessage by remember { mutableStateOf("") }
+    val chessScope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         while (true) {
             delay(1000)
@@ -253,9 +260,38 @@ private val QLILAC = Color(0xFFB9AAFF)
                             QuestStore.startChess(ctx); update()
                         }
                     } else {
-                        Text("Játék folyamatban. Ha a parti valóban véget ért, igazold a teljesítést. Az alkalmazás a sakkpartit automatikusan nem tudja ellenőrizni.",
-                            color = QSOFT)
-                        QPrimary("LEJÁTSZOTTAM A MECCSET  ·  +5 perc") {
+                        Text("Ellenőrizheted a befejezett partit nyilvános Lichess vagy Chess.com fiókkal. Jelszót nem kérünk.",color=QSOFT)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (site in listOf("lichess","chesscom")) {
+                                OutlinedButton(onClick = { chessPlatform = site },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = if (chessPlatform == site) QGREEN else QSOFT)) {
+                                    Text(if (site == "lichess") "Lichess" else "Chess.com")
+                                }
+                            }
+                        }
+                        OutlinedTextField(value=chessUser,
+                            onValueChange={ if(it.length<=25)chessUser=it },
+                            label={Text("Sakk-felhasználóneved")},
+                            modifier=Modifier.fillMaxWidth(),
+                            shape=RoundedCornerShape(14.dp))
+                        QPrimary(if (chessChecking) "ELLENŐRZÉS..." else "PARTI AUTOMATIKUS ELLENŐRZÉSE",
+                            enabled = !chessChecking && chessUser.length>=2) {
+                            ChessVerifier.setAccount(ctx,chessPlatform,chessUser)
+                            chessChecking=true
+                            chessScope.launch {
+                                val result = ChessVerifier.check(ctx)
+                                chessMessage=result.message
+                                if(result.found) QuestStore.verifiedChess(ctx)
+                                chessChecking=false
+                                update()
+                            }
+                        }
+                        if(chessMessage.isNotEmpty()) Text(chessMessage,color=QGREEN)
+                        Text("Ha a partiban nem online játszottál, kézzel is igazolhatod. Az online nyilvános adatok nem bizonyítják a fiók tulajdonjogát.",
+                            color=QSOFT,fontSize=12.sp)
+                        QSecondary("OFFLINE PARTI KÉZI IGAZOLÁSA") {
                             QuestStore.completeChess(ctx); update()
                         }
                     }
