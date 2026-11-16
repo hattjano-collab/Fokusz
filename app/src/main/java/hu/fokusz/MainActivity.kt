@@ -36,6 +36,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -49,6 +53,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -407,6 +413,41 @@ class MainActivity : ComponentActivity() {
         hands.size < 4 && !current.ace && bal >= current.bet
     val betEnabled = wagerValid && !live && !coinFlipping
 
+    val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(modifier=Modifier.width(295.dp),
+                drawerContainerColor=Panel) {
+                Column(Modifier.statusBarsPadding().padding(16.dp),
+                    verticalArrangement=Arrangement.spacedBy(7.dp)) {
+                    Text("FÓKUSZ",color=Mint,fontWeight=FontWeight.Black,fontSize=24.sp)
+                    Text("Válassz funkciót",color=Muted,fontSize=13.sp)
+                    Spacer(Modifier.height(12.dp))
+                    listOf(
+                        Triple(0,"♠","Gambling"),
+                        Triple(1,"✦","Questek"),
+                        Triple(2,"◷","Képernyőidő"),
+                        Triple(3,"▥","Statisztika"),
+                        Triple(4,"◎","AI-edző"),
+                        Triple(5,"◉","Fókuszmód"),
+                        Triple(6,"⚙","Beállítások")
+                    ).forEach { (id,symbol,label) ->
+                        NavigationDrawerItem(
+                            label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
+                            selected=tab==id,
+                            onClick={
+                                tab=id
+                                drawerScope.launch { drawerState.close() }
+                            },
+                            shape=RoundedCornerShape(15.dp)
+                        )
+                    }
+                }
+            }
+        }
+    ) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
             .verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 20.dp),
@@ -425,23 +466,17 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF101A2C)).padding(5.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            NavTab("Gambling", "♠", tab == 0, Modifier.weight(1f)) { tab = 0 }
-            NavTab("Questek", "✦", tab == 1, Modifier.weight(1f)) { tab = 1 }
-            NavTab("Képernyőidő", "◷", tab == 2, Modifier.weight(1f)) { tab = 2 }
-        }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .clip(RoundedCornerShape(19.dp)).background(Color(0xFF101A2C))
-            .padding(5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NavTab("Statisztika", "◫", tab == 3, Modifier.width(132.dp)) { tab = 3 }
-            NavTab("AI-edző", "◎", tab == 4, Modifier.width(112.dp)) { tab = 4 }
-            NavTab("Fókuszmód", "◉", tab == 5, Modifier.width(132.dp)) { tab = 5 }
-            NavTab("Beállítások", "⚙", tab == 6, Modifier.width(140.dp)) { tab = 6 }
-            NavTab("Barátok", "♧", tab == 7, Modifier.width(120.dp)) { tab = 7 }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp))
+            .background(Panel2).padding(5.dp), verticalAlignment=Alignment.CenterVertically,
+            horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick={drawerScope.launch { drawerState.open() }},
+                border=BorderStroke(1.dp,Border),shape=RoundedCornerShape(13.dp),
+                colors=ButtonDefaults.outlinedButtonColors(contentColor=Mint)) {
+                Text("☰  MENÜ",fontWeight=FontWeight.Bold)
+            }
+            Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
+                "AI-edző","Fókuszmód","Beállítások").getOrElse(tab) { "Fókusz" },
+                color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
         if (tab == 0) {
@@ -592,7 +627,7 @@ class MainActivity : ComponentActivity() {
                     color = Muted, fontSize = 11.sp)
             }
         } else if (tab == 1) {
-            QuestPanel(isRunning, usageOk, overlayOk) { tab = 2 }
+            QuestPanel(isRunning, usageOk, overlayOk, { tab = 2 }, { tab = 6 })
         } else if (tab == 2) {
             SectionLabel("Képernyőidő", "Az időkereted, engedélyeid és védelmed.")
             TimeHero(bal)
@@ -660,13 +695,12 @@ class MainActivity : ComponentActivity() {
             FocusPanel(isRunning, usageOk, overlayOk) { tab = 2 }
         } else if (tab == 6) {
             OptionsPanel()
-        } else if (tab == 7) {
-            FriendsPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.0", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.1", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
+    }
     }
 }
 
