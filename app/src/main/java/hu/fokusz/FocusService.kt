@@ -41,6 +41,7 @@ class FocusService : Service() {
     private var lastEventTime = 0L
     private var currentPackage = ""
     private var cover: View? = null
+    private var coverQuestMode = false
     private var windowManager: WindowManager? = null
     private val pulse = object : Runnable {
         override fun run() {
@@ -64,6 +65,7 @@ class FocusService : Service() {
             .build()
         startForeground(2, notification)
         isRunning = true
+        QuestStore.resetClock(this)
         handler.post(pulse)
     }
 
@@ -77,6 +79,7 @@ class FocusService : Service() {
 
     private fun monitor() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
+        QuestStore.tick(this)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         if (!pm.isInteractive) { hideCover(); return }
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
@@ -93,13 +96,21 @@ class FocusService : Service() {
         }
         lastEventTime = recentTime
         if (currentPackage in Store.BLOCKED) {
-            if (Store.bal(this) > 0) Store.add(this, -1)
-            if (Store.bal(this) <= 0) showCover() else hideCover()
+            if (QuestStore.isTimerLocked(this)) {
+                showCover(true)
+            } else {
+                if (Store.bal(this) > 0) Store.add(this, -1)
+                if (Store.bal(this) <= 0) showCover(false) else hideCover()
+            }
         } else hideCover()
     }
 
-    private fun showCover() {
-        if (cover != null) return
+    private fun showCover(questMode: Boolean) {
+        if (cover != null) {
+            if (coverQuestMode == questMode) return
+            hideCover()
+        }
+        coverQuestMode = questMode
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -108,13 +119,14 @@ class FocusService : Service() {
             setBackgroundColor(Color.rgb(16, 22, 38))
         }
         val title = TextView(this).apply {
-            text = "🔒 Fókusz\\nElfogyott a mai időkereted"
+            text = if (questMode) "🔒 Fókusz\nQuest folyamatban!" else "🔒 Fókusz\nElfogyott a mai időkereted"
             textSize = 26f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
         }
         val desc = TextView(this).apply {
-            text = "A Fókusz alkalmazásban további perceket szerezhetsz."
+            text = if (questMode) "A küldetés időzítője alatt a közösségi appok zárolva vannak. Térj vissza a feladatodhoz!"
+                else "A Fókusz alkalmazásban további perceket szerezhetsz."
             textSize = 17f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -134,7 +146,7 @@ class FocusService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.CENTER
