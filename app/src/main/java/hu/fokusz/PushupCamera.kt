@@ -3,6 +3,8 @@ package hu.fokusz
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.PointF
+import android.os.SystemClock
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,7 +47,7 @@ import kotlin.math.acos
 import kotlin.math.abs
 import kotlin.math.sqrt
 
-private data class PoseFeedback(val message: String, val rep: Boolean = false)
+data class PoseFeedback(val message: String, val rep: Boolean = false)
 
 private class PushupCounter {
     private var stage = 0 // várjuk a fent -> lent -> fent sorozatot
@@ -114,7 +116,7 @@ private class PushupCounter {
 }
 
 @OptIn(ExperimentalGetImage::class)
-@Composable fun PushupCamera(questId: Int, onRep: () -> Unit) {
+@Composable fun PushupCamera(questId: Int, mode: String = "pushups", onRep: () -> Unit) {
     val context = LocalContext.current
     val owner = context as ComponentActivity
     var granted by remember {
@@ -128,6 +130,9 @@ private class PushupCounter {
         if (!it) hint = "A számláláshoz engedélyezned kell a kamerát."
     }
     val onRepUpdated by rememberUpdatedState(onRep)
+    val speaker = remember { TextToSpeech(context) { } }
+    var spokenAt by remember { mutableStateOf(0L) }
+    DisposableEffect(speaker) { onDispose { speaker.shutdown() } }
 
     if (!granted) {
         Text("A kamerakép helyben kerül elemzésre, nem készül róla felvétel.",
@@ -142,6 +147,7 @@ private class PushupCounter {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
     }
     val counter = remember(questId, front) { PushupCounter() }
+    val exerciseCounter = remember(questId, front, mode) { ExerciseCounter(mode) }
     AndroidView(factory = { previewView },
         modifier = Modifier.fillMaxWidth().height(260.dp).background(Color.Black, RoundedCornerShape(16.dp)))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -151,7 +157,7 @@ private class PushupCounter {
         }
     }
     Text(hint, color = Color(0xFF7BE7C1))
-    Text("Oldalnézetből, teljes testtel a képen. A számláló figyeli a könyökszöget és az egyenes törzset.",
+    Text("Oldalnézetből látszódjon a teljes tested. Mód: " + mode + ". Hangos visszajelzéssel.",
         color = Color(0xFFA7B4CC))
     Text("A felismerés csak becslés: a fényviszonyok és a kamera szöge befolyásolhatják.",
         color = Color(0xFFA7B4CC))
@@ -182,9 +188,17 @@ private class PushupCounter {
                                 detector.process(input)
                                     .addOnSuccessListener(ContextCompat.getMainExecutor(context)) { pose ->
                                         if (!disposed) {
-                                            val f = counter.analyze(pose)
+                                            val f = if (mode == "pushups") counter.analyze(pose) else exerciseCounter.analyze(pose)
                                             hint = f.message
                                             if (f.rep) onRepUpdated()
+                                            val now=SystemClock.elapsedRealtime()
+                                            if (now-spokenAt>4000L || (f.rep && now-spokenAt>700L)) {
+                                                if (f.rep || f.message.contains("egyenes") || f.message.contains("térded")) {
+                                                    spokenAt=now
+                                                    speaker.speak(if (f.rep) "Jó! Plusz egy." else f.message,
+                                                        TextToSpeech.QUEUE_FLUSH,null,"fokusz_coach")
+                                                }
+                                            }
                                         }
                                     }
                                     .addOnFailureListener(ContextCompat.getMainExecutor(context)) {
