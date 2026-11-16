@@ -35,7 +35,7 @@ object Store {
         val max = FocusPrefs.maxBalance(c)
         val n = (bal(c).toLong() + sec).coerceIn(0L, max.toLong()).toInt()
         sp(c).edit().putInt("b", n).apply()
-        ProgressStore.updateWidget(c)
+        if (sec > 0 || n % 15 == 0) ProgressStore.updateWidget(c)
         return n
     }
 }
