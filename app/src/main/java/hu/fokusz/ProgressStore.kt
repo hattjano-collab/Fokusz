@@ -36,6 +36,13 @@ object ProgressStore {
         if (seconds > 0) increment(c, "earned", seconds)
     }
 
+    @Synchronized fun coachReps(c: Context, count: Int) {
+        if(count<=0) return
+        increment(c,"reps",count)
+        val p=sp(c)
+        p.edit().putInt("total_reps",p.getInt("total_reps",0)+count).apply()
+    }
+
     @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int) {
         val p = sp(c)
         increment(c, "tasks", 1)
