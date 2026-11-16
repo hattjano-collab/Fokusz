@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_vertical"
+    android:background="#17253A"
+    android:padding="16dp">
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="FÓKUSZ  •  IDŐEGYENLEG"
+        android:textColor="#7BE7C1"
+        android:textStyle="bold"
+        android:textSize="11sp"/>
+    <TextView
+        android:id="@+id/widget_balance"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="30:00"
+        android:textColor="#F5F7FF"
+        android:textStyle="bold"
+        android:textSize="32sp"
+        android:paddingTop="5dp"/>
+    <TextView
+        android:id="@+id/widget_quest"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Válassz kezdő questet!"
+        android:textColor="#F5F7FF"
+        android:textSize="12sp"
+        android:maxLines="2"/>
+    <TextView
+        android:id="@+id/widget_xp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Lv. 1"
+        android:textColor="#B9AAFF"
+        android:textSize="11sp"
+        android:paddingTop="6dp"/>
+</LinearLayout>
