@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "hu.fokusz"
     compileSdk = 35
-    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "1.4" }
+    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "2.0" }
     buildFeatures { compose = true }
     // A nagy, helyi ML Kit modellhez tartozó natív könyvtárakat tömörítve
     // csomagoljuk, hogy mobilon/tableten kisebb legyen az APK.
