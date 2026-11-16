@@ -635,7 +635,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  1.3", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  1.4", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
