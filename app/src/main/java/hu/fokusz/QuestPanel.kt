@@ -74,7 +74,7 @@ private val YELLOW = Color(0xFFFFC78D)
         }
     }
 
-    val q = QuestStore.current(ctx)
+    val q = remember(frame) { QuestStore.current(ctx) }
     val phase = QuestStore.phase(ctx)
     val counted = QuestStore.reps(ctx)
     val remain = QuestStore.secondsLeft(ctx)
