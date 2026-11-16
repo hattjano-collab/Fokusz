@@ -190,7 +190,16 @@ object QuestStore {
 
     @Synchronized fun startChess(c: Context): Boolean {
         if (active(c) != CHESS || phase(c) != 0) return false
-        return sp(c).edit().putInt("phase", 1).commit()
+        return sp(c).edit().putInt("phase", 1)
+            .putLong("chessStartedAt", System.currentTimeMillis()).commit()
+    }
+    @Synchronized fun chessStartedAt(c: Context): Long {
+        daily(c)
+        return sp(c).getLong("chessStartedAt", 0L)
+    }
+    @Synchronized fun verifiedChess(c: Context): Boolean {
+        if (active(c) != CHESS || phase(c) != 1) return false
+        return finish(c, 300, "Sakkmeccs online ellenőrizve: +5 perc")
     }
 
     @Synchronized fun completeChess(c: Context): Boolean {
