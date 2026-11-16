@@ -83,11 +83,17 @@ object QuestStore {
     @Synchronized private fun daily(c: Context) {
         val s = sp(c)
         val today = java.time.LocalDate.now().toString()
-        if (s.getString("day", "") == today) return
+        if (s.getString("day", "") == today) {
+            if (!s.contains("chessGoal")) s.edit().putInt("chessGoal", random.nextInt(5) + 1).commit()
+            return
+        }
+        val previousChess = s.getInt("chessGoal", 0)
+        val nextChessGoal = (1..5).filter { it != previousChess }[random.nextInt(if (previousChess in 1..5) 4 else 5)]
         s.edit()
             .putString("day", today)
             .putInt("pushTarget", if (s.contains("pushTarget")) { if (s.getInt("pushTarget", 10) == 10) 20 else 10 } else { if (random.nextBoolean()) 10 else 20 })
             .putBoolean("chessDone", false)
+            .putInt("chessGoal", nextChessGoal)
             .putBoolean("pushDone", false)
             .putString("active", NONE)
             .putInt("phase", 0)
@@ -105,6 +111,7 @@ object QuestStore {
     }
 
     @Synchronized fun pushTarget(c: Context): Int { daily(c); return sp(c).getInt("pushTarget", 10) }
+    @Synchronized fun chessGoal(c: Context): Int { daily(c); return sp(c).getInt("chessGoal", 1) }
     @Synchronized fun chessDone(c: Context): Boolean { daily(c); return sp(c).getBoolean("chessDone", false) }
     @Synchronized fun pushDone(c: Context): Boolean { daily(c); return sp(c).getBoolean("pushDone", false) }
     @Synchronized fun skips(c: Context): Int { daily(c); return sp(c).getInt("skips", 0) }
@@ -120,9 +127,9 @@ object QuestStore {
         daily(c)
         val s = sp(c)
         return when (active(c)) {
-            CHESS -> Quest(-101, "Játssz le egy sakkmeccset",
-                "Játssz végig egy valódi sakkpartit. A győzelem nem feltétel; a teljesítésedet te igazolod.",
-                "♟️", QuestKind.CHESS, 1, 300)
+            CHESS -> Quest(-101, "Játssz le " + chessGoal(c) + " sakkmeccset",
+                "A korábban összekötött Lichess vagy Chess.com fiókod nyilvános, befejezett napi partijait ellenőrizzük. Nincs kézi jóváírás.",
+                "♟️", QuestKind.CHESS, chessGoal(c), 300)
             PUSH -> {
                 val n = pushTarget(c)
                 Quest(-102, n.toString() + " szabályos fekvőtámasz",
@@ -154,6 +161,7 @@ object QuestStore {
 
     @Synchronized fun chooseStarter(c: Context, item: String): Boolean {
         if (item !in availableStarters(c)) return false
+        if (item == CHESS && !ChessVerifier.isLinked(c)) return false
         setActive(c, item)
         return true
     }
@@ -197,14 +205,10 @@ object QuestStore {
         daily(c)
         return sp(c).getLong("chessStartedAt", 0L)
     }
-    @Synchronized fun verifiedChess(c: Context): Boolean {
-        if (active(c) != CHESS || phase(c) != 1) return false
-        return finish(c, 300, "Sakkmeccs online ellenőrizve: +5 perc")
-    }
-
-    @Synchronized fun completeChess(c: Context): Boolean {
-        if (active(c) != CHESS || phase(c) != 1) return false
-        return finish(c, 300, "Sakkmeccs teljesítve: +5 perc")
+    @Synchronized fun verifiedChess(c: Context, verifiedGames: Int): Boolean {
+        if (active(c) != CHESS || phase(c) != 1 || !ChessVerifier.isLinked(c)
+            || verifiedGames < chessGoal(c)) return false
+        return finish(c, 300, chessGoal(c).toString() + " sakkparti ellenőrizve: +5 perc")
     }
 
     /** Fekvő és extra fekvő quest: csak a kamerás mozgásfelismerés hívhatja. */
