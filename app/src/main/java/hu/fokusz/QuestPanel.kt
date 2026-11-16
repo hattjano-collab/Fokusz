@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -142,9 +143,9 @@ private val QLILAC = Color(0xFFB9AAFF)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("NAPI KÜLDETÉSEK", color = QWHITE,
-                    fontWeight = FontWeight.ExtraBold, fontSize = androidx.compose.ui.unit.TextUnit(24f, androidx.compose.ui.unit.TextUnitType.Sp))
+                    fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
                 Text("Te választod a sorrendet. Az extra questek utána jönnek.",
-                    color = QSOFT, fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp))
+                    color = QSOFT, fontSize = 12.sp)
             }
         }
         QCard(listOf(Color(0xFF1D3F43), Color(0xFF17263C))) {
@@ -163,14 +164,14 @@ private val QLILAC = Color(0xFFB9AAFF)
             Text(
                 if (doneChess && donePush) "Mindkét kezdő quest kész! Az extra questek feloldva."
                 else "Előbb a két kezdő questet teljesítsd (vagy helyettesítsd / skippeld).",
-                color = QSOFT, fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)
+                color = QSOFT, fontSize = 12.sp
             )
         }
 
         if (quest == null) {
             QCard {
                 Text("MELYIKKEL KEZDESZ?", color = QLILAC,
-                    fontWeight = FontWeight.ExtraBold, fontSize = androidx.compose.ui.unit.TextUnit(21f, androidx.compose.ui.unit.TextUnitType.Sp))
+                    fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
                 Text("A két kezdő quest sorrendjét te választod. Mindkettőt meg kell oldani, mielőtt extra feladatot kapsz.",
                     color = QSOFT)
                 if (!doneChess) QPrimary("♟  SAKKMECCS  ·  +5 perc") {
@@ -190,21 +191,21 @@ private val QLILAC = Color(0xFFB9AAFF)
                         else if (active == "custom") "EGYÉNI QUEST" else "EXTRA QUEST",
                         color = QLILAC,
                         fontWeight = FontWeight.Bold,
-                        fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        fontSize = 12.sp)
                     Spacer(Modifier.weight(1f))
                     Text(if (p == 2) "✓ KÉSZ" else if (p == 1) "FOLYAMATBAN" else "AKTÍV",
                         color = if (p == 2) QGREEN else QYELLOW, fontWeight = FontWeight.Bold,
-                        fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        fontSize = 11.sp)
                 }
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(88.dp).clip(CircleShape)
                         .background(Brush.radialGradient(listOf(Color(0xFF4B496B), Color(0xFF27293E)))),
                         contentAlignment = Alignment.Center) {
-                        Text(quest.icon, fontSize = androidx.compose.ui.unit.TextUnit(43f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        Text(quest.icon, fontSize = 43.sp)
                     }
                 }
                 Text(quest.title, color = QWHITE,
-                    fontSize = androidx.compose.ui.unit.TextUnit(23f, androidx.compose.ui.unit.TextUnitType.Sp),
+                    fontSize = 23.sp,
                     fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth())
                 Text(quest.description, color = QSOFT, textAlign = TextAlign.Center,
@@ -214,7 +215,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                         .background(Color(0xFF21334C)).padding(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("FELADAT", color = QSOFT,
-                            fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp))
+                            fontSize = 11.sp)
                         Text(when (quest.kind) {
                             QuestKind.TIMED -> duration(quest.goal)
                             QuestKind.CHESS -> "1 játszma"
@@ -225,7 +226,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                         .background(Color(0xFF1B3D3B)).padding(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("JUTALOM", color = QSOFT,
-                            fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp))
+                            fontSize = 11.sp)
                         Text("+" + duration(quest.reward), color = QGREEN,
                             fontWeight = FontWeight.Bold)
                     }
@@ -262,7 +263,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                         fontWeight = FontWeight.Bold)
                     Text(QuestStore.reps(ctx).toString() + " / " + quest.goal,
                         color = QWHITE, textAlign = TextAlign.Center,
-                        fontSize = androidx.compose.ui.unit.TextUnit(48f, androidx.compose.ui.unit.TextUnitType.Sp),
+                        fontSize = 48.sp,
                         fontWeight = FontWeight.ExtraBold, modifier = Modifier.fillMaxWidth())
                     LinearProgressIndicator(
                         progress = { QuestStore.reps(ctx).toFloat() / quest.goal },
@@ -279,7 +280,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                         }
                     }
                     Text("A kamerás testtartás-felismerés becslés; nem garantálható, hogy minden szabálytalan ismétlést felismer.",
-                        color = QSOFT, fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        color = QSOFT, fontSize = 12.sp)
                 } else {
                     if (p == 0) {
                         Text("A feladat ideje alatt a figyelt közösségi appok nem használhatók. A visszaszámlálást az aktív háttérvédelem futtatja.",
@@ -304,7 +305,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             fontWeight = FontWeight.Bold)
                         Text(clock(remaining), color = QWHITE,
                             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
-                            fontSize = androidx.compose.ui.unit.TextUnit(50f, androidx.compose.ui.unit.TextUnitType.Sp),
+                            fontSize = 50.sp,
                             fontWeight = FontWeight.ExtraBold)
                         LinearProgressIndicator(
                             progress = { ((quest.goal - remaining).toFloat() / quest.goal).coerceIn(0f, 1f) },
@@ -336,7 +337,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                 QCard(listOf(Color(0xFF272A3A), QBG)) {
                     Text("ALTERNATÍVÁK", color = QWHITE,
                         fontWeight = FontWeight.Bold,
-                        fontSize = androidx.compose.ui.unit.TextUnit(18f, androidx.compose.ui.unit.TextUnitType.Sp))
+                        fontSize = 18.sp)
                     Text("A nap folyamán háromszor kihagyhatsz egy questet, darabonként 5 percért.",
                         color = QSOFT)
                     QSecondary(
@@ -399,7 +400,7 @@ private val QLILAC = Color(0xFFB9AAFF)
             Text("↪  3 kihagyás naponta: –5 perc / alkalom", color = QWHITE)
             Text("✦  1 egyéni csere naponta: 15 perc → +10 perc", color = QWHITE)
             Text("A napi lehetőségek éjfélkor megújulnak. Az extra questek a két kezdő feladat után véletlenszerűen következnek.",
-                color = QSOFT, fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp))
+                color = QSOFT, fontSize = 12.sp)
         }
     }
 }
