@@ -11,6 +11,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,7 +68,14 @@ import kotlin.math.abs
 private val Midnight = Color(0xFF090F1F)
 private val Panel = Color(0xFF141E32)
 private val Panel2 = Color(0xFF1B2740)
-private val Mint = Color(0xFF7BE7C1)
+private var Mint by mutableStateOf(Color(0xFF7BE7C1))
+fun updateFokuszTheme(theme: String) {
+    Mint = when (theme) {
+        "lila" -> Color(0xFFB9AAFF)
+        "arany" -> Color(0xFFFFC78D)
+        else -> Color(0xFF7BE7C1)
+    }
+}
 private val Gold = Color(0xFFFFC78D)
 private val Lilac = Color(0xFFB9AAFF)
 private val Muted = Color(0xFFA7B4CC)
@@ -238,6 +246,7 @@ class MainActivity : ComponentActivity() {
 @Composable fun FokuszApp() {
     val ctx = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
     var usageOk by remember { mutableStateOf(UsageGuard.allowed(ctx)) }
@@ -424,6 +433,15 @@ class MainActivity : ComponentActivity() {
             NavTab("Questek", "✦", tab == 1, Modifier.weight(1f)) { tab = 1 }
             NavTab("Képernyőidő", "◷", tab == 2, Modifier.weight(1f)) { tab = 2 }
         }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .clip(RoundedCornerShape(19.dp)).background(Color(0xFF101A2C))
+            .padding(5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            NavTab("Statisztika", "◫", tab == 3, Modifier.width(132.dp)) { tab = 3 }
+            NavTab("AI-edző", "◎", tab == 4, Modifier.width(112.dp)) { tab = 4 }
+            NavTab("Fókuszmód", "◉", tab == 5, Modifier.width(132.dp)) { tab = 5 }
+            NavTab("Beállítások", "⚙", tab == 6, Modifier.width(140.dp)) { tab = 6 }
+            NavTab("Barátok", "♧", tab == 7, Modifier.width(120.dp)) { tab = 7 }
+        }
 
         if (tab == 0) {
             TimeHero(bal, compact = true)
@@ -574,7 +592,7 @@ class MainActivity : ComponentActivity() {
             }
         } else if (tab == 1) {
             QuestPanel(isRunning, usageOk, overlayOk) { tab = 2 }
-        } else {
+        } else if (tab == 2) {
             SectionLabel("Képernyőidő", "Az időkereted, engedélyeid és védelmed.")
             TimeHero(bal)
             GlassCard {
@@ -633,9 +651,19 @@ class MainActivity : ComponentActivity() {
                 Text("Minden adat helyben marad a telefonon. A Fókusz nem használ valódi pénzt.",
                     color = Muted, fontSize = 12.sp)
             }
+        } else if (tab == 3) {
+            StatsPanel()
+        } else if (tab == 4) {
+            CoachPanel()
+        } else if (tab == 5) {
+            FocusPanel(isRunning, usageOk, overlayOk) { tab = 2 }
+        } else if (tab == 6) {
+            OptionsPanel()
+        } else if (tab == 7) {
+            FriendsPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  1.4", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.0", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
