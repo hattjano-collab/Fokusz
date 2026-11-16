@@ -220,6 +220,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             QuestKind.TIMED -> duration(quest.goal)
                             QuestKind.CHESS -> "1 játszma"
                             QuestKind.PUSHUPS -> quest.goal.toString() + " fekvő"
+                            QuestKind.EXERCISE -> quest.goal.toString() + if (quest.mode=="plank") " mp plank" else " ismétlés"
                         }, color = QWHITE, fontWeight = FontWeight.Bold)
                     }
                     Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
@@ -258,7 +259,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             QuestStore.completeChess(ctx); update()
                         }
                     }
-                } else if (quest.kind == QuestKind.PUSHUPS) {
+                } else if (quest.kind == QuestKind.PUSHUPS || quest.kind == QuestKind.EXERCISE) {
                     Text("KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
                         fontWeight = FontWeight.Bold)
                     Text(QuestStore.reps(ctx).toString() + " / " + quest.goal,
@@ -274,7 +275,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                         QPrimary("KAMERÁS SZÁMLÁLÓ INDÍTÁSA") { cameraOn = true }
                     } else {
                         QSecondary("Kamera kikapcsolása") { cameraOn = false }
-                        PushupCamera(quest.id) {
+                        PushupCamera(quest.id, mode = quest.mode) {
                             QuestStore.rep(ctx, quest.id)
                             update()
                         }
