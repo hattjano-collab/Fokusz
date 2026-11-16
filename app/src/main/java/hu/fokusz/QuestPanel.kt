@@ -112,7 +112,8 @@ private val QLILAC = Color(0xFFB9AAFF)
     serviceOn: Boolean,
     usageOk: Boolean,
     overlayOk: Boolean,
-    openTimeTab: () -> Unit
+    openTimeTab: () -> Unit,
+    openSettingsTab: () -> Unit
 ) {
     val ctx = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
@@ -120,8 +121,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     var customEditing by remember { mutableStateOf(false) }
     var customTitle by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
-    var chessUser by remember { mutableStateOf(ChessVerifier.username(ctx)) }
-    var chessPlatform by remember { mutableStateOf(ChessVerifier.platform(ctx)) }
+    var chessCount by remember { mutableIntStateOf(0) }
     var chessChecking by remember { mutableStateOf(false) }
     var chessMessage by remember { mutableStateOf("") }
     val chessScope = rememberCoroutineScope()
@@ -146,6 +146,26 @@ private val QLILAC = Color(0xFFB9AAFF)
 
     fun update() { refresh++ }
 
+    // Az egyszer mentett fiókot a sakkquest megnyitásakor és utána percenként újraellenőrzi.
+    LaunchedEffect(active, p) {
+        if (active == "chess" && p == 1 && ChessVerifier.isLinked(ctx)) {
+            while (true) {
+                chessChecking = true
+                val progress = ChessVerifier.dailyProgress(ctx)
+                chessChecking = false
+                chessMessage = progress.message
+                if (progress.success) {
+                    chessCount = progress.count
+                    if (QuestStore.verifiedChess(ctx, progress.count)) {
+                        refresh++
+                        break
+                    }
+                }
+                delay(60_000)
+            }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column {
@@ -161,7 +181,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                 Spacer(Modifier.weight(1f))
                 Text(completeCount.toString() + " kész", color = QGREEN, fontWeight = FontWeight.Bold)
             }
-            StarterStatus("♟️  Sakkmeccs", doneChess, "+5 perc")
+            StarterStatus("♟️  " + QuestStore.chessGoal(ctx) + " sakkmeccs", doneChess, "+5 perc")
             StarterStatus("💪  " + pushTarget + " fekvőtámasz", donePush, "+10 perc")
             LinearProgressIndicator(
                 progress = { (listOf(doneChess, donePush).count { it }.toFloat() / 2f) },
@@ -181,9 +201,16 @@ private val QLILAC = Color(0xFFB9AAFF)
                     fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
                 Text("A két kezdő quest sorrendjét te választod. Mindkettőt meg kell oldani, mielőtt extra feladatot kapsz.",
                     color = QSOFT)
-                if (!doneChess) QPrimary("♟  SAKKMECCS  ·  +5 perc") {
-                    QuestStore.chooseStarter(ctx, "chess")
-                    update()
+                if (!doneChess) {
+                    if (ChessVerifier.isLinked(ctx)) {
+                        QPrimary("♟  " + QuestStore.chessGoal(ctx) + " SAKKMECCS  ·  +5 perc") {
+                            QuestStore.chooseStarter(ctx, "chess"); update()
+                        }
+                    } else {
+                        Text("A sakkquesthez egyszer össze kell kötni a Lichess vagy Chess.com fiókodat a Beállításokban.",
+                            color=QYELLOW, fontSize=12.sp)
+                        QSecondary("SAKKFIÓK ÖSSZEKÖTÉSE") { openSettingsTab() }
+                    }
                 }
                 if (!donePush) QPrimary("💪  " + pushTarget + " FEKVŐ  ·  +10 perc") {
                     QuestStore.chooseStarter(ctx, "push")
@@ -225,7 +252,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             fontSize = 11.sp)
                         Text(when (quest.kind) {
                             QuestKind.TIMED -> duration(quest.goal)
-                            QuestKind.CHESS -> "1 játszma"
+                            QuestKind.CHESS -> quest.goal.toString() + " játszma"
                             QuestKind.PUSHUPS -> quest.goal.toString() + " fekvő"
                             QuestKind.EXERCISE -> quest.goal.toString() + (if (quest.mode=="plank") " mp plank" else " ismétlés")
                         }, color = QWHITE, fontWeight = FontWeight.Bold)
@@ -253,47 +280,39 @@ private val QLILAC = Color(0xFFB9AAFF)
                         update()
                     }
                 } else if (quest.kind == QuestKind.CHESS) {
+                    Text("Sakkfiók: " + ChessVerifier.username(ctx) + " (" +
+                        if(ChessVerifier.platform(ctx)=="lichess") "Lichess)" else "Chess.com)",
+                        color=QSOFT)
+                    Text(chessCount.toString() + " / " + quest.goal + " ellenőrzött mai parti",
+                        color=QGREEN, fontSize=22.sp, fontWeight=FontWeight.Bold,
+                        textAlign=TextAlign.Center, modifier=Modifier.fillMaxWidth())
+                    LinearProgressIndicator(
+                        progress={ (chessCount.toFloat() / quest.goal).coerceIn(0f,1f) },
+                        color=QGREEN,trackColor=QEDGE,
+                        modifier=Modifier.fillMaxWidth().height(9.dp).clip(CircleShape))
                     if (p == 0) {
-                        Text("Játssz egy teljes sakkmeccset élőben vagy egy alkalmazásban. Az eredménytől függetlenül jár az 5 perc.",
-                            color = QSOFT)
-                        QPrimary("♟  SAKKMECCS KEZDÉSE") {
-                            QuestStore.startChess(ctx); update()
-                        }
+                        Text("A mai " + quest.goal + " meccshez automatikus online ellenőrzés szükséges. A győzelem nem feltétel.",
+                            color=QSOFT)
+                        QPrimary("♟  SAKKQUEST INDÍTÁSA") { QuestStore.startChess(ctx); update() }
                     } else {
-                        Text("Ellenőrizheted a befejezett partit nyilvános Lichess vagy Chess.com fiókkal. Jelszót nem kérünk.",color=QSOFT)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            for (site in listOf("lichess","chesscom")) {
-                                OutlinedButton(onClick = { chessPlatform = site },
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.outlinedButtonColors(
-                                        contentColor = if (chessPlatform == site) QGREEN else QSOFT)) {
-                                    Text(if (site == "lichess") "Lichess" else "Chess.com")
-                                }
-                            }
-                        }
-                        OutlinedTextField(value=chessUser,
-                            onValueChange={ if(it.length<=25)chessUser=it },
-                            label={Text("Sakk-felhasználóneved")},
-                            modifier=Modifier.fillMaxWidth(),
-                            shape=RoundedCornerShape(14.dp))
-                        QPrimary(if (chessChecking) "ELLENŐRZÉS..." else "PARTI AUTOMATIKUS ELLENŐRZÉSE",
-                            enabled = !chessChecking && chessUser.length>=2) {
-                            ChessVerifier.setAccount(ctx,chessPlatform,chessUser)
-                            chessChecking=true
-                            chessScope.launch {
-                                val result = ChessVerifier.check(ctx)
-                                chessMessage=result.message
-                                if(result.found) QuestStore.verifiedChess(ctx)
+                        Text(if(chessChecking) "Sakkmeccsek ellenőrzése..." else chessMessage.ifEmpty {
+                            "A nyilvános partijait automatikusan figyeljük, amikor megnyitod a Fókuszt."
+                        },color=QSOFT)
+                        QSecondary("MOST ELLENŐRZÖM") {
+                            if(!chessChecking) chessScope.launch {
+                                chessChecking=true
+                                val progress=ChessVerifier.dailyProgress(ctx)
                                 chessChecking=false
+                                chessMessage=progress.message
+                                if(progress.success) {
+                                    chessCount=progress.count
+                                    QuestStore.verifiedChess(ctx, progress.count)
+                                }
                                 update()
                             }
                         }
-                        if(chessMessage.isNotEmpty()) Text(chessMessage,color=QGREEN)
-                        Text("Ha a partiban nem online játszottál, kézzel is igazolhatod. Az online nyilvános adatok nem bizonyítják a fiók tulajdonjogát.",
+                        Text("Csak a mentett fiók mai befejezett online játszmái számítanak. Kézi igazolás nincs.",
                             color=QSOFT,fontSize=12.sp)
-                        QSecondary("OFFLINE PARTI KÉZI IGAZOLÁSA") {
-                            QuestStore.completeChess(ctx); update()
-                        }
                     }
                 } else if (quest.kind == QuestKind.PUSHUPS || quest.kind == QuestKind.EXERCISE) {
                     Text("KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
