@@ -8,6 +8,9 @@ android {
     compileSdk = 35
     defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "1.3" }
     buildFeatures { compose = true }
+    // A nagy, helyi ML Kit modellhez tartozó natív könyvtárakat tömörítve
+    // csomagoljuk, hogy mobilon/tableten kisebb legyen az APK.
+    packaging { jniLibs { useLegacyPackaging = true } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
