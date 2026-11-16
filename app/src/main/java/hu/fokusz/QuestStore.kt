@@ -311,7 +311,10 @@ object QuestStore {
         e.commit()
         val before = Store.bal(c)
         Store.add(c, reward)
-        ProgressStore.taskFinished(c, q?.kind?.name ?: "OTHER", q?.goal ?: 0,
+        val studyIds = setOf(3, 6, 12, 13, 14, 15, 16)
+        val statsType = if (q?.kind == QuestKind.TIMED && q.id in studyIds) "STUDY"
+            else if (q?.kind == QuestKind.TIMED) "OTHER" else q?.kind?.name ?: "OTHER"
+        ProgressStore.taskFinished(c, statsType, q?.goal ?: 0,
             (Store.bal(c) - before).coerceAtLeast(0))
         return true
     }
