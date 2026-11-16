@@ -231,6 +231,9 @@ private val C = Color(0xFF273750)
     val level = ProgressStore.level(ctx)
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("BEÁLLÍTÁSOK", color = W, fontSize = 23.sp, fontWeight = FontWeight.Black)
+        FeatureCard("♟️ KÖTELEZŐ SAKKFÓKUSZ") {
+            ChessAccountPanel()
+        }
         FeatureCard("🔒 SAJÁT BLOKKLISTA") {
             Text("Válaszd ki, mely appok fogyasszák a napi időkeretet. A questek és a mélyfókusz idején további appok is blokkoltak lehetnek.",
                 color = M, fontSize = 12.sp)
@@ -290,62 +293,6 @@ private val C = Color(0xFF273750)
                 color = M)
             Text("A Fókusz saját fejlesztésű app, nem rendszerkomponens. A tiltás nem megkerülhetetlen.",
                 color = M)
-        }
-    }
-}
-
-@Composable fun FriendsPanel() {
-    val ctx = LocalContext.current
-    var displayName by remember { mutableStateOf("Én") }
-    var friendName by remember { mutableStateOf("") }
-    var friendXP by remember { mutableStateOf("") }
-    var refresh by remember { mutableIntStateOf(0) }
-    val xp = ProgressStore.xp(ctx)
-    val entries = (FocusPrefs.friends(ctx) + FocusPrefs.Friend(displayName.ifBlank { "Én" },xp))
-        .sortedByDescending { it.xp }
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("BARÁTOK ÉS KIHÍVÁSOK", color = W, fontSize = 23.sp, fontWeight = FontWeight.Black)
-        FeatureCard("🤝 EREDMÉNY MEGOSZTÁSA") {
-            Text("Küldd el XP-det és heti eredményedet egy barátodnak. Ehhez nem kell fiók.",
-                color = M)
-            OutlinedTextField(value = displayName,
-                onValueChange = { if (it.length <= 25) displayName = it },
-                label = { Text("Megjelenő neved") }, modifier = Modifier.fillMaxWidth())
-            FeatureButton("EREDMÉNY MEGOSZTÁSA") {
-                val share = "FÓKUSZ kihívás 🏆\n" + displayName + "\n" + xp +
-                    " XP | " + ProgressStore.weekTasks(ctx) + " quest ezen a héten.\n" +
-                    "Mennyit tudsz teljesíteni?"
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, share)
-                }
-                ctx.startActivity(Intent.createChooser(intent,"Fókusz kihívás megosztása"))
-            }
-        }
-        FeatureCard("🏅 HELYI BARÁTI RANGLISTA") {
-            Text("Az ismerőseid elküldhetik az XP-jüket, te pedig felveheted őket. Ez helyi, kézi ranglista; nincs automatikus szerveres szinkron.",
-                color = M, fontSize = 12.sp)
-            for ((index,item) in entries.withIndex()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text((index+1).toString() + ". " + item.name, color = W,
-                        modifier = Modifier.weight(1f))
-                    Text(item.xp.toString() + " XP", color = A)
-                }
-            }
-        }
-        FeatureCard("➕ BARÁT FELVÉTELE") {
-            OutlinedTextField(value = friendName,
-                onValueChange = { if(it.length<=25)friendName=it },
-                label = { Text("Barát neve") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(value = friendXP,
-                onValueChange = { if(it.length<=6 && it.all(Char::isDigit))friendXP=it },
-                label = { Text("XP-je (általa megosztott)") }, modifier = Modifier.fillMaxWidth())
-            FeatureButton("HOZZÁADÁS",enabled = friendName.trim().length>=2 &&
-                (friendXP.toIntOrNull() ?: -1)>=0) {
-                if (FocusPrefs.addFriend(ctx,friendName,friendXP.toIntOrNull() ?: 0)) {
-                    friendName="";friendXP="";refresh++
-                }
-            }
         }
     }
 }
