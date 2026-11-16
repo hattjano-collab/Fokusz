@@ -228,7 +228,7 @@ class MainActivity : ComponentActivity() {
         contentAlignment = Alignment.Center
     ) {
         Text(symbol + "  " + title,
-            fontSize = 14.sp,
+            fontSize = 11.sp,
             color = if (selected) Mint else Muted,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1)
@@ -421,7 +421,8 @@ class MainActivity : ComponentActivity() {
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             NavTab("Gambling", "♠", tab == 0, Modifier.weight(1f)) { tab = 0 }
-            NavTab("Képernyőidő", "◷", tab == 1, Modifier.weight(1f)) { tab = 1 }
+            NavTab("Questek", "✦", tab == 1, Modifier.weight(1f)) { tab = 1 }
+            NavTab("Képernyőidő", "◷", tab == 2, Modifier.weight(1f)) { tab = 2 }
         }
 
         if (tab == 0) {
@@ -571,6 +572,8 @@ class MainActivity : ComponentActivity() {
                 Text("Split: azonos értékű kártyáknál, legfeljebb 4 kézig. Az új kézhez külön fedezet kell.",
                     color = Muted, fontSize = 11.sp)
             }
+        } else if (tab == 1) {
+            QuestPanel(isRunning, usageOk, overlayOk) { tab = 2 }
         } else {
             SectionLabel("Képernyőidő", "Az időkereted, engedélyeid és védelmed.")
             TimeHero(bal)
@@ -632,7 +635,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  1.2", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  1.3", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
