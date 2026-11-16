@@ -32,6 +32,10 @@ object Store {
         return s.getInt("b", DAILY)
     }
     @Synchronized fun add(c: Context, sec: Int): Int {
-        val n = maxOf(0, bal(c) + sec); sp(c).edit().putInt("b", n).apply(); return n
+        val max = FocusPrefs.maxBalance(c)
+        val n = (bal(c).toLong() + sec).coerceIn(0L, max.toLong()).toInt()
+        sp(c).edit().putInt("b", n).apply()
+        ProgressStore.updateWidget(c)
+        return n
     }
 }
