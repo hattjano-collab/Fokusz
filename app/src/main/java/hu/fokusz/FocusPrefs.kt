@@ -95,24 +95,4 @@ object FocusPrefs {
         if (focusPhase(c) == 2) focus(c).edit().putInt("phase", 0).commit()
     }
 
-    private fun friendsPrefs(c: Context) = c.getSharedPreferences("fokusz_friends", 0)
-    data class Friend(val name: String, val xp: Int)
-    /** Helyi kézi összehasonlítás, nem hiteles, nem szerveres szinkron. */
-    fun friends(c: Context): List<Friend> {
-        val saved = friendsPrefs(c).getString("saved", "") ?: ""
-        return saved.lines().mapNotNull { row ->
-            val parts = row.split('|', limit = 2)
-            val n = parts.getOrNull(0) ?: return@mapNotNull null
-            val xp = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
-            if (n.isBlank()) null else Friend(n, xp)
-        }.take(20)
-    }
-    fun addFriend(c: Context, name: String, xp: Int): Boolean {
-        val safeName = name.trim().replace("|", "").replace("\n", "")
-        if (safeName.length !in 2..25 || xp !in 0..999999) return false
-        val list = friends(c).filterNot { it.name.equals(safeName, ignoreCase = true) } +
-            Friend(safeName, xp)
-        friendsPrefs(c).edit().putString("saved", list.takeLast(20).joinToString("\n") { it.name + "|" + it.xp }).apply()
-        return true
-    }
 }
