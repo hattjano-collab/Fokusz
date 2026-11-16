@@ -43,14 +43,14 @@ object ProgressStore {
             increment(c, "reps", goal)
             p.edit().putInt("total_reps", p.getInt("total_reps", 0) + goal).apply()
         }
-        if (type == "TIMED") {
+        if (type == "STUDY") {
             increment(c, "studying", goal)
         }
         if (type == "CHESS") p.edit().putInt("total_chess", p.getInt("total_chess", 0) + 1).apply()
         val newXP = p.getInt("xp", 0) + when (type) {
             "PUSHUPS" -> 50
             "CHESS" -> 45
-            "TIMED" -> 35
+            "STUDY" -> 35
             else -> 25
         }
         val today = LocalDate.now().toString()
@@ -77,9 +77,9 @@ object ProgressStore {
     fun totalReps(c: Context) = sp(c).getInt("total_reps", 0)
     fun totalChess(c: Context) = sp(c).getInt("total_chess", 0)
     fun totalTasks(c: Context) = sp(c).getInt("total_tasks", 0)
-    fun weekTasks(c: Context): Int = recent(c).sumOf { it.tasks }
-    fun weekReps(c: Context): Int = recent(c).sumOf { it.exercises }
-    fun weekStudy(c: Context): Int = recent(c).sumOf { it.studying }
+    fun weekTasks(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.tasks }
+    fun weekReps(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.exercises }
+    fun weekStudy(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.studying }
     fun milestones(c: Context): List<Pair<String, Boolean>> = listOf(
         "🏁 Első küldetés" to (totalTasks(c) >= 1),
         "♟️ 10 sakkmeccs" to (totalChess(c) >= 10),
