@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import java.security.SecureRandom
 
-enum class QuestKind { TIMED, PUSHUPS }
+enum class QuestKind { TIMED, PUSHUPS, CHESS }
 
 data class Quest(
     val id: Int,
@@ -66,62 +66,182 @@ object QuestStore {
     )
     private val byId = all.associateBy { it.id }
     private val random = SecureRandom()
-    private fun sp(c: Context) = c.getSharedPreferences("fokusz_quests_v1", Context.MODE_PRIVATE)
+    // v2 elkülönítve: a régi időegyenleg érintetlen marad.
+    private fun sp(c: Context) = c.getSharedPreferences("fokusz_quests_v2", Context.MODE_PRIVATE)
 
-    /** Egyetlen véletlenszerű küldetés; a 40 feladat ismétlés nélkül kerül elő. */
-    @Synchronized fun current(c: Context): Quest {
-        val state = sp(c)
-        val chosen = byId[state.getInt("id", -1)]
-        if (chosen != null) return chosen
-        return drawNext(c)
-    }
+    private const val CHESS = "chess"
+    private const val PUSH = "push"
+    private const val EXTRA = "extra"
+    private const val CUSTOM = "custom"
+    private const val NONE = ""
 
-    private fun drawNext(c: Context): Quest {
-        val state = sp(c)
-        val previous = state.getInt("id", -1)
-        val left = state.getString("bag", "")!!.split(",")
-            .mapNotNull { it.toIntOrNull() }.filter { it in byId }
-            .toMutableList()
-        if (left.isEmpty()) {
-            left.addAll(all.map { it.id })
-            left.shuffle(random)
-            if (left.size > 1 && left.first() == previous) {
-                val x = left.removeAt(0); left.add(x)
-            }
-        }
-        val chosen = left.removeAt(0)
-        state.edit()
-            .putInt("id", chosen)
+    /** A nap váltásakor új sakk + 10/20 fekvő; az extra sorrend megmarad. */
+    @Synchronized private fun daily(c: Context) {
+        val s = sp(c)
+        val today = java.time.LocalDate.now().toString()
+        if (s.getString("day", "") == today) return
+        s.edit()
+            .putString("day", today)
+            .putInt("pushTarget", if (random.nextBoolean()) 10 else 20)
+            .putBoolean("chessDone", false)
+            .putBoolean("pushDone", false)
+            .putString("active", NONE)
             .putInt("phase", 0)
             .putInt("reps", 0)
-            .putLong("elapsed", 0)
-            .putLong("last", 0)
-            .putString("bag", left.joinToString(","))
+            .putLong("elapsed", 0L)
+            .putLong("last", 0L)
+            .putInt("skips", 0)
+            .putBoolean("customUsed", false)
+            .putString("customName", "")
+            .putInt("completed", 0)
+            .putString("result", "")
+            .remove("extraId")
             .commit()
-        return byId.getValue(chosen)
     }
 
-    @Synchronized fun phase(c: Context) = sp(c).getInt("phase", 0)
-    @Synchronized fun reps(c: Context) = sp(c).getInt("reps", 0)
-    @Synchronized fun completed(c: Context) = sp(c).getInt("completed", 0)
+    @Synchronized fun pushTarget(c: Context): Int { daily(c); return sp(c).getInt("pushTarget", 10) }
+    @Synchronized fun chessDone(c: Context): Boolean { daily(c); return sp(c).getBoolean("chessDone", false) }
+    @Synchronized fun pushDone(c: Context): Boolean { daily(c); return sp(c).getBoolean("pushDone", false) }
+    @Synchronized fun skips(c: Context): Int { daily(c); return sp(c).getInt("skips", 0) }
+    @Synchronized fun customUsed(c: Context): Boolean { daily(c); return sp(c).getBoolean("customUsed", false) }
+    @Synchronized fun completed(c: Context): Int { daily(c); return sp(c).getInt("completed", 0) }
+    @Synchronized fun result(c: Context): String { daily(c); return sp(c).getString("result", "") ?: "" }
+    @Synchronized fun phase(c: Context): Int { daily(c); return sp(c).getInt("phase", 0) }
+    @Synchronized fun reps(c: Context): Int { daily(c); return sp(c).getInt("reps", 0) }
+    @Synchronized fun active(c: Context): String { daily(c); return sp(c).getString("active", NONE) ?: NONE }
+    @Synchronized fun startersFinished(c: Context) = chessDone(c) && pushDone(c)
+
+    @Synchronized fun current(c: Context): Quest? {
+        daily(c)
+        val s = sp(c)
+        return when (active(c)) {
+            CHESS -> Quest(-101, "Játssz le egy sakkmeccset",
+                "Játssz végig egy valódi sakkpartit. A győzelem nem feltétel; a teljesítésedet te igazolod.",
+                "♟️", QuestKind.CHESS, 1, 300)
+            PUSH -> {
+                val n = pushTarget(c)
+                Quest(-102, n.toString() + " szabályos fekvőtámasz",
+                    "Kamerával ellenőrzött, teljes le–fel fekvőtámasz. A napi cél 10 vagy 20 ismétlés.",
+                    "💪", QuestKind.PUSHUPS, n, 600)
+            }
+            CUSTOM -> Quest(-103, s.getString("customName", "Saját feladat") ?: "Saját feladat",
+                "15 perc megszakítás nélküli egyéni tevékenység, közben a figyelt közösségi appok zárolva vannak.",
+                "✦", QuestKind.TIMED, 900, 600)
+            EXTRA -> byId[s.getInt("extraId", -1)]
+            else -> null
+        }
+    }
+
+    @Synchronized fun availableStarters(c: Context): List<String> {
+        daily(c)
+        if (active(c) != NONE) return emptyList()
+        val result = mutableListOf<String>()
+        if (!chessDone(c)) result.add(CHESS)
+        if (!pushDone(c)) result.add(PUSH)
+        return result
+    }
+
+    private fun setActive(c: Context, item: String) {
+        sp(c).edit().putString("active", item).putInt("phase", 0)
+            .putInt("reps", 0).putLong("elapsed", 0L).putLong("last", 0L)
+            .putString("result", "").commit()
+    }
+
+    @Synchronized fun chooseStarter(c: Context, item: String): Boolean {
+        if (item !in availableStarters(c)) return false
+        setActive(c, item)
+        return true
+    }
+
+    /** 40 elemű kevert zsák; egy teljes körön belül nincs ismétlés. */
+    @Synchronized private fun drawExtra(c: Context): Quest {
+        val s = sp(c)
+        val old = s.getInt("extraId", -1)
+        val bag = s.getString("bag", "")!!.split(",")
+            .mapNotNull { it.toIntOrNull() }.filter { it in byId }.toMutableList()
+        if (bag.isEmpty()) {
+            bag.addAll(all.map { it.id })
+            bag.shuffle(random)
+            if (bag.size > 1 && bag.first() == old) bag.add(bag.removeAt(0))
+        }
+        val id = bag.removeAt(0)
+        s.edit().putInt("extraId", id).putString("bag", bag.joinToString(",")).commit()
+        setActive(c, EXTRA)
+        return byId.getValue(id)
+    }
+
+    /** A két napi kezdő quest után jöhetnek csak extra feladatok. */
+    @Synchronized fun ensureQuest(c: Context): Quest? {
+        current(c)?.let { return it }
+        return if (startersFinished(c)) drawExtra(c) else null
+    }
+
+    @Synchronized fun startChess(c: Context): Boolean {
+        if (active(c) != CHESS || phase(c) != 0) return false
+        return sp(c).edit().putInt("phase", 1).commit()
+    }
+
+    @Synchronized fun completeChess(c: Context): Boolean {
+        if (active(c) != CHESS || phase(c) != 1) return false
+        return finish(c, 300, "Sakkmeccs teljesítve: +5 perc")
+    }
+
+    /** Fekvő és extra fekvő quest: csak a kamerás mozgásfelismerés hívhatja. */
+    @Synchronized fun rep(c: Context, id: Int): Boolean {
+        val q = current(c) ?: return false
+        if (q.id != id || q.kind != QuestKind.PUSHUPS || phase(c) != 0) return false
+        val n = (reps(c) + 1).coerceAtMost(q.goal)
+        sp(c).edit().putInt("reps", n).commit()
+        return if (n == q.goal) finish(c, q.reward, "Fekvőtámaszok teljesítve: +" + duration(q.reward)) else false
+    }
+
+    /** Napi egyszer lecserélheted az aktív questet 15 perc egyéni feladatra. */
+    @Synchronized fun useCustom(c: Context, name: String): Boolean {
+        if (customUsed(c) || phase(c) != 0 || active(c) == NONE) return false
+        if (name.trim().length < 3 || name.length > 80) return false
+        val old = active(c)
+        val e = sp(c).edit().putBoolean("customUsed", true)
+            .putString("customName", name.trim())
+        if (old == CHESS) e.putBoolean("chessDone", true)
+        if (old == PUSH) e.putBoolean("pushDone", true)
+        e.commit()
+        setActive(c, CUSTOM)
+        return true
+    }
+
+    /** Naponta 3 skip, skipenként levonunk 5 percet. */
+    @Synchronized fun skip(c: Context): Boolean {
+        val active = active(c)
+        if (active == NONE || phase(c) != 0 || skips(c) >= 3 || Store.bal(c) < 300) return false
+        val s = sp(c)
+        Store.add(c, -300)
+        val e = s.edit().putInt("skips", skips(c) + 1)
+            .putInt("phase", 2).putInt("completed", completed(c) + 1)
+            .putString("result", "Kihagyva –5 percért. Jutalom nem jár.")
+        if (active == CHESS) e.putBoolean("chessDone", true)
+        if (active == PUSH) e.putBoolean("pushDone", true)
+        e.commit()
+        return true
+    }
 
     @Synchronized fun startTimed(c: Context): Boolean {
-        val q = current(c)
+        val q = current(c) ?: return false
         if (q.kind != QuestKind.TIMED || phase(c) != 0) return false
-        return sp(c).edit().putInt("phase", 1).putLong("elapsed", 0)
+        return sp(c).edit().putInt("phase", 1)
+            .putLong("elapsed", 0L)
             .putLong("last", SystemClock.elapsedRealtime()).commit()
     }
 
-    /** Csak a működő, használati hozzáféréssel rendelkező védelmi szolgáltatás írhatja jóvá az időt. */
+    /** A visszaszámlálást csak az aktív háttérvédelem működteti. */
     @Synchronized fun tick(c: Context) {
-        val q = current(c)
+        val q = current(c) ?: return
         if (q.kind != QuestKind.TIMED || phase(c) != 1) return
         val state = sp(c)
         val now = SystemClock.elapsedRealtime()
-        val last = state.getLong("last", 0)
-        val delta = if (last > 0 && now >= last) (now - last).coerceIn(0, 1300) else 0
-        val newValue = (state.getLong("elapsed", 0L) + delta).coerceAtMost(q.goal * 1000L)
-        state.edit().putLong("elapsed", newValue).putLong("last", now).apply()
+        val last = state.getLong("last", 0L)
+        val delta = if (last > 0 && now >= last) (now - last).coerceIn(0L, 1500L) else 0L
+        val updated = (state.getLong("elapsed", 0L) + delta).coerceAtMost(q.goal * 1000L)
+        state.edit().putLong("elapsed", updated).putLong("last", now).apply()
     }
 
     @Synchronized fun resetClock(c: Context) {
@@ -129,38 +249,39 @@ object QuestStore {
     }
 
     @Synchronized fun secondsLeft(c: Context): Int {
-        val q = current(c)
+        val q = current(c) ?: return 0
         if (q.kind != QuestKind.TIMED) return 0
         val elapsed = sp(c).getLong("elapsed", 0L)
-        return ((q.goal * 1000L - elapsed).coerceAtLeast(0) + 999L).div(1000L).toInt()
+        return ((q.goal * 1000L - elapsed).coerceAtLeast(0L) + 999L).div(1000L).toInt()
     }
 
     @Synchronized fun isTimerLocked(c: Context): Boolean =
-        current(c).kind == QuestKind.TIMED && phase(c) == 1 && secondsLeft(c) > 0
+        current(c)?.kind == QuestKind.TIMED && phase(c) == 1 && secondsLeft(c) > 0
 
-    /** Visszatérési érték csak akkor true, ha ez az esemény tényleg megszerezte a jutalmat. */
     @Synchronized fun completeTimed(c: Context): Boolean {
-        val q = current(c)
+        val q = current(c) ?: return false
         if (q.kind != QuestKind.TIMED || phase(c) != 1 || secondsLeft(c) > 0) return false
-        return award(c, q.reward)
+        return finish(c, q.reward, "Feladat teljesítve: +" + duration(q.reward))
     }
 
-    @Synchronized fun rep(c: Context, id: Int): Boolean {
-        val q = current(c)
-        if (q.id != id || q.kind != QuestKind.PUSHUPS || phase(c) != 0) return false
-        val n = (reps(c) + 1).coerceAtMost(q.goal)
-        sp(c).edit().putInt("reps", n).commit()
-        return if (n == q.goal) award(c, q.reward) else false
-    }
-
-    private fun award(c: Context, reward: Int): Boolean {
+    private fun finish(c: Context, reward: Int, result: String): Boolean {
         if (phase(c) == 2) return false
-        sp(c).edit().putInt("phase", 2)
-            .putInt("completed", completed(c) + 1).commit()
+        val a = active(c)
+        val e = sp(c).edit()
+            .putInt("phase", 2)
+            .putInt("completed", completed(c) + 1)
+            .putString("result", result)
+        if (a == CHESS) e.putBoolean("chessDone", true)
+        if (a == PUSH) e.putBoolean("pushDone", true)
+        e.commit()
         Store.add(c, reward)
         return true
     }
 
-    @Synchronized fun next(c: Context): Quest? =
-        if (phase(c) == 2) drawNext(c) else null
+    /** A következő feladatot csak a jelenlegi quest befejezése/skip után generáljuk. */
+    @Synchronized fun next(c: Context): Quest? {
+        if (phase(c) != 2) return current(c)
+        setActive(c, NONE)
+        return ensureQuest(c)
+    }
 }
