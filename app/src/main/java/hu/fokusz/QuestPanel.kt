@@ -227,7 +227,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             QuestKind.TIMED -> duration(quest.goal)
                             QuestKind.CHESS -> "1 játszma"
                             QuestKind.PUSHUPS -> quest.goal.toString() + " fekvő"
-                            QuestKind.EXERCISE -> quest.goal.toString() + if (quest.mode=="plank") " mp plank" else " ismétlés"
+                            QuestKind.EXERCISE -> quest.goal.toString() + (if (quest.mode=="plank") " mp plank" else " ismétlés")
                         }, color = QWHITE, fontWeight = FontWeight.Bold)
                     }
                     Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
