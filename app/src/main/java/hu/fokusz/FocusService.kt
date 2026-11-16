@@ -66,6 +66,7 @@ class FocusService : Service() {
         startForeground(2, notification)
         isRunning = true
         QuestStore.resetClock(this)
+        FocusPrefs.resetClock(this)
         handler.post(pulse)
     }
 
@@ -80,6 +81,7 @@ class FocusService : Service() {
     private fun monitor() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         QuestStore.tick(this)
+        FocusPrefs.tick(this)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         if (!pm.isInteractive) { hideCover(); return }
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
@@ -96,14 +98,25 @@ class FocusService : Service() {
         }
         lastEventTime = recentTime
         val questLocked = QuestStore.isTimerLocked(this)
-        val customBrowserLocked = QuestStore.isCustomTimerLocked(this) && currentPackage in Store.BROWSERS
-        if (currentPackage in Store.BLOCKED || (questLocked && currentPackage in Store.QUEST_SOCIAL)
-            || customBrowserLocked) {
-            if (questLocked) {
-                showCover(true)
-            } else {
+        val focusLocked = FocusPrefs.focusLocked(this)
+        val locked = questLocked || focusLocked
+        val browsersLocked = (QuestStore.isCustomTimerLocked(this) || focusLocked) &&
+            currentPackage in Store.BROWSERS
+        val isSocial = FocusPrefs.blocked(this, currentPackage)
+            || (locked && (currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL))
+        if (isSocial || browsersLocked) {
+            if (FocusPrefs.emergencyActive(this) && !QuestStore.isCustomTimerLocked(this)) {
                 if (Store.bal(this) > 0) Store.add(this, -1)
+                ProgressStore.used(this, 1)
+                hideCover()
+            } else if (locked) {
+                showCover(true)
+            } else if (FocusPrefs.blocked(this, currentPackage)) {
+                if (Store.bal(this) > 0) Store.add(this, -1)
+                ProgressStore.used(this, 1)
                 if (Store.bal(this) <= 0) showCover(false) else hideCover()
+            } else {
+                hideCover()
             }
         } else hideCover()
     }
