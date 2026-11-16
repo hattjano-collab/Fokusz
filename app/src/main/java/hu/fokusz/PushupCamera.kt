@@ -123,7 +123,7 @@ private class PushupCounter {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED)
     }
-    var front by remember { mutableStateOf(false) }
+    var front by remember { mutableStateOf(true) }
     var hint by remember { mutableStateOf("Tedd le a telefont oldalra, majd lépj a képbe.") }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
