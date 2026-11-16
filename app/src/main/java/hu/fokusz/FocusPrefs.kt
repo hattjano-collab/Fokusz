@@ -1,0 +1,118 @@
+package hu.fokusz
+
+import android.content.Context
+import android.os.SystemClock
+import java.time.LocalDate
+
+object FocusPrefs {
+    private fun sp(c: Context) = c.getSharedPreferences("fokusz_options_v1", Context.MODE_PRIVATE)
+    val socialChoices = listOf(
+        "TikTok" to "com.zhiliaoapp.musically",
+        "Instagram" to "com.instagram.android",
+        "YouTube" to "com.google.android.youtube",
+        "Snapchat" to "com.snapchat.android",
+        "X" to "com.twitter.android",
+        "Facebook" to "com.facebook.katana",
+        "Reddit" to "com.reddit.frontpage",
+        "Discord" to "com.discord",
+        "WhatsApp" to "com.whatsapp",
+        "Telegram" to "org.telegram.messenger",
+        "Messenger" to "com.facebook.orca",
+        "Threads" to "com.instagram.barcelona",
+        "Pinterest" to "com.pinterest",
+        "BeReal" to "com.bereal.ft"
+    )
+    private val standard = Store.BLOCKED + setOf("com.ss.android.ugc.trill")
+    fun blocked(c: Context, pkg: String): Boolean {
+        val p = sp(c)
+        return p.getBoolean("blocked_" + pkg, pkg in standard)
+    }
+    fun setBlocked(c: Context, pkg: String, enabled: Boolean) {
+        sp(c).edit().putBoolean("blocked_" + pkg, enabled).apply()
+    }
+    fun maxBalance(c: Context) = sp(c).getInt("maximum_seconds", 14400)
+    fun setMaxBalance(c: Context, sec: Int) {
+        sp(c).edit().putInt("maximum_seconds", sec.coerceIn(1800, 21600)).apply()
+    }
+    fun theme(c: Context) = sp(c).getString("theme", "menta") ?: "menta"
+    fun setTheme(c: Context, value: String) { sp(c).edit().putString("theme", value).apply() }
+
+    private fun today() = LocalDate.now().toString()
+    @Synchronized fun emergencyAvailable(c: Context): Boolean =
+        sp(c).getString("emergency_date", "") != today()
+    @Synchronized fun activateEmergency(c: Context): Boolean {
+        if (!emergencyAvailable(c)) return false
+        // Ne lehessen az egyéni quest teljes lezárását feloldani.
+        if (QuestStore.isCustomTimerLocked(c)) return false
+        sp(c).edit().putString("emergency_date", today())
+            .putLong("emergency_until", SystemClock.elapsedRealtime() + 180000L).commit()
+        return true
+    }
+    fun emergencyActive(c: Context): Boolean =
+        sp(c).getString("emergency_date", "") == today() &&
+            SystemClock.elapsedRealtime() < sp(c).getLong("emergency_until", 0L) &&
+            !QuestStore.isCustomTimerLocked(c)
+    fun emergencyLeft(c: Context): Int {
+        if (!emergencyActive(c)) return 0
+        return ((sp(c).getLong("emergency_until", 0L) - SystemClock.elapsedRealtime()) / 1000L).toInt().coerceAtLeast(0)
+    }
+
+    private fun focus(c: Context) = c.getSharedPreferences("fokusz_focus_v1", Context.MODE_PRIVATE)
+    @Synchronized fun focusPhase(c: Context): Int = focus(c).getInt("phase", 0) // 0 off,1 active,2 finished
+    @Synchronized fun focusTarget(c: Context) = focus(c).getInt("target", 1500)
+    @Synchronized fun startFocus(c: Context, seconds: Int): Boolean {
+        if (focusPhase(c) == 1) return false
+        if (QuestStore.isTimerLocked(c)) return false
+        if (seconds !in 900..3600) return false
+        focus(c).edit().putInt("phase", 1).putInt("target", seconds).putLong("elapsed", 0)
+            .putLong("last", SystemClock.elapsedRealtime()).commit()
+        return true
+    }
+    @Synchronized fun tick(c: Context) {
+        if (focusPhase(c) != 1) return
+        val s = focus(c)
+        val now = SystemClock.elapsedRealtime()
+        val last = s.getLong("last", 0L)
+        val delta = if (last > 0 && now >= last) (now - last).coerceIn(0, 1500) else 0
+        val elapsed = (s.getLong("elapsed", 0) + delta).coerceAtMost(focusTarget(c) * 1000L)
+        s.edit().putLong("elapsed", elapsed).putLong("last", now).apply()
+    }
+    @Synchronized fun resetClock(c: Context) {
+        if (focusPhase(c) == 1) focus(c).edit().putLong("last", SystemClock.elapsedRealtime()).apply()
+    }
+    fun focusLeft(c: Context): Int =
+        ((focusTarget(c) * 1000L - focus(c).getLong("elapsed", 0L)).coerceAtLeast(0L) + 999L).div(1000).toInt()
+    fun focusLocked(c: Context) = focusPhase(c) == 1 && focusLeft(c) > 0
+    @Synchronized fun claimFocus(c: Context): Boolean {
+        if (focusPhase(c) != 1 || focusLeft(c) > 0) return false
+        focus(c).edit().putInt("phase", 2).commit()
+        val reward = focusTarget(c) / 3
+        Store.add(c, reward)
+        ProgressStore.taskFinished(c, "TIMED", focusTarget(c), reward)
+        return true
+    }
+    @Synchronized fun clearFocus(c: Context) {
+        if (focusPhase(c) == 2) focus(c).edit().putInt("phase", 0).commit()
+    }
+
+    private fun friends(c: Context) = c.getSharedPreferences("fokusz_friends", 0)
+    data class Friend(val name: String, val xp: Int)
+    /** Helyi kézi összehasonlítás, nem hiteles, nem szerveres szinkron. */
+    fun friends(c: Context): List<Friend> {
+        val saved = friends(c).getString("saved", "") ?: ""
+        return saved.lines().mapNotNull { row ->
+            val parts = row.split('|', limit = 2)
+            val n = parts.getOrNull(0) ?: return@mapNotNull null
+            val xp = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+            if (n.isBlank()) null else Friend(n, xp)
+        }.take(20)
+    }
+    fun addFriend(c: Context, name: String, xp: Int): Boolean {
+        val safeName = name.trim().replace("|", "").replace("\n", "")
+        if (safeName.length !in 2..25 || xp !in 0..999999) return false
+        val list = friends(c).filterNot { it.name.equals(safeName, ignoreCase = true) } +
+            Friend(safeName, xp)
+        friends(c).edit().putString("saved", list.takeLast(20).joinToString("\n") { it.name + "|" + it.xp }).apply()
+        return true
+    }
+}
