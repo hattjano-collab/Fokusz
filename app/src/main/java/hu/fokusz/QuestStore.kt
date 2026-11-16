@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import java.security.SecureRandom
 
-enum class QuestKind { TIMED, PUSHUPS, CHESS }
+enum class QuestKind { TIMED, PUSHUPS, EXERCISE, CHESS }
 
 data class Quest(
     val id: Int,
@@ -13,7 +13,8 @@ data class Quest(
     val icon: String,
     val kind: QuestKind,
     val goal: Int,       // másodperc vagy szabályos fekvőtámasz
-    val reward: Int      // bónusz képernyőidő másodpercben
+    val reward: Int,     // bónusz képernyőidő másodpercben
+    val mode: String = "pushups"
 )
 
 object QuestStore {
@@ -21,6 +22,9 @@ object QuestStore {
         Quest(id, title, detail, icon, QuestKind.TIMED, minutes * 60, reward * 60)
     private fun p(id: Int, title: String, count: Int, reward: Int) =
         Quest(id, title, "Oldalról, teljes testtel a kamerában. Csak a szabályos, le-fel mozdulat számít.", "💪", QuestKind.PUSHUPS, count, reward * 60)
+
+    private fun e(id: Int, title: String, count: Int, reward: Int, mode: String) =
+        Quest(id, title, "Kamerás gyakorlat, testhelyzet-ellenőrzéssel és hangos visszajelzéssel.", "🏋️", QuestKind.EXERCISE, count, reward * 60, mode)
 
     val all = listOf(
         p(1, "20 szabályos fekvőtámasz", 20, 10),
@@ -31,9 +35,9 @@ object QuestStore {
         t(6, "Olvass egy könyvet", "Olvass figyelmesen, telefon nélkül.", "📖", 15, 10),
         t(7, "Rakj rendet az asztalodon", "A felesleges dolgok kerüljenek a helyükre.", "🗂️", 10, 9),
         p(8, "10 szabályos fekvőtámasz", 10, 6),
-        p(9, "15 szabályos fekvőtámasz", 15, 8),
-        p(10, "25 szabályos fekvőtámasz", 25, 13),
-        p(11, "30 szabályos fekvőtámasz", 30, 16),
+        e(9, "20 guggolás", 20, 8, "squats"),
+        e(10, "12 kitörés", 12, 10, "lunges"),
+        e(11, "30 másodperc plank", 30, 10, "plank"),
         t(12, "Házi feladat megoldása", "Dolgozz a házi feladatodon, ne csak olvasgasd.", "✏️", 25, 20),
         t(13, "Német vagy angol gyakorlás", "Tanulj szavakat, olvass vagy oldj meg feladatokat.", "🌍", 15, 12),
         t(14, "Szókártyázás", "Ismételj és teszteld magad szókártyákkal.", "🃏", 20, 15),
@@ -161,8 +165,15 @@ object QuestStore {
         val bag = s.getString("bag", "")!!.split(",")
             .mapNotNull { it.toIntOrNull() }.filter { it in byId }.toMutableList()
         if (bag.isEmpty()) {
-            bag.addAll(all.map { it.id })
-            bag.shuffle(random)
+            val weekend = java.time.LocalDate.now().dayOfWeek.value >= 6
+            val daytime = java.time.LocalTime.now().hour in 8..19
+            val prioritized = all.map { it to (random.nextInt(100) + when {
+                weekend && daytime && it.id in setOf(4, 5, 26, 27, 28, 29, 30, 31, 33) -> 55
+                !weekend && it.id in setOf(3, 7, 12, 13, 14, 15, 16, 23, 24, 25) -> 55
+                !daytime && it.id in setOf(4, 5, 26, 27, 28, 33) -> -80
+                else -> 0
+            }) }.sortedByDescending { it.second }.map { it.first.id }
+            bag.addAll(prioritized)
             if (bag.size > 1 && bag.first() == old) bag.add(bag.removeAt(0))
         }
         val id = bag.removeAt(0)
@@ -190,7 +201,7 @@ object QuestStore {
     /** Fekvő és extra fekvő quest: csak a kamerás mozgásfelismerés hívhatja. */
     @Synchronized fun rep(c: Context, id: Int): Boolean {
         val q = current(c) ?: return false
-        if (q.id != id || q.kind != QuestKind.PUSHUPS || phase(c) != 0) return false
+        if (q.id != id || (q.kind != QuestKind.PUSHUPS && q.kind != QuestKind.EXERCISE) || phase(c) != 0) return false
         val n = (reps(c) + 1).coerceAtMost(q.goal)
         sp(c).edit().putInt("reps", n).commit()
         return if (n == q.goal) finish(c, q.reward, "Fekvőtámaszok teljesítve: +" + duration(q.reward)) else false
@@ -216,7 +227,7 @@ object QuestStore {
         val s = sp(c)
         Store.add(c, -300)
         val e = s.edit().putInt("skips", skips(c) + 1)
-            .putInt("phase", 2).putInt("completed", completed(c) + 1)
+            .putInt("phase", 2)
             .putString("result", "Kihagyva –5 percért. Jutalom nem jár.")
         if (active == CHESS) e.putBoolean("chessDone", true)
         if (active == PUSH) e.putBoolean("pushDone", true)
@@ -275,6 +286,7 @@ object QuestStore {
     private fun finish(c: Context, reward: Int, result: String): Boolean {
         if (phase(c) == 2) return false
         val a = active(c)
+        val q = current(c)
         val e = sp(c).edit()
             .putInt("phase", 2)
             .putInt("completed", completed(c) + 1)
@@ -288,7 +300,10 @@ object QuestStore {
             }
         }
         e.commit()
+        val before = Store.bal(c)
         Store.add(c, reward)
+        ProgressStore.taskFinished(c, q?.kind?.name ?: "OTHER", q?.goal ?: 0,
+            (Store.bal(c) - before).coerceAtLeast(0))
         return true
     }
 
