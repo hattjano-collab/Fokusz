@@ -255,6 +255,8 @@ object QuestStore {
         return ((q.goal * 1000L - elapsed).coerceAtLeast(0L) + 999L).div(1000L).toInt()
     }
 
+    @Synchronized fun isCustomTimerLocked(c: Context): Boolean = active(c) == CUSTOM && isTimerLocked(c)
+
     @Synchronized fun isTimerLocked(c: Context): Boolean =
         current(c)?.kind == QuestKind.TIMED && phase(c) == 1 && secondsLeft(c) > 0
 
