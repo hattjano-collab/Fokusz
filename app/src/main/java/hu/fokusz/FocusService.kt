@@ -70,6 +70,7 @@ class FocusService : Service() {
         val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         startForeground(2,liveNotification())
         isRunning = true
+        CloudTeams.start(this)
         QuestStore.resetClock(this)
         FocusPrefs.resetClock(this)
         handler.post(pulse)
@@ -108,6 +109,7 @@ class FocusService : Service() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         QuestStore.tick(this)
         FocusPrefs.tick(this)
+        CloudTeams.pulse(this)
         val elapsed=SystemClock.elapsedRealtime()
         if(elapsed-lastNotification>=20000L) {
             lastNotification=elapsed
@@ -165,7 +167,7 @@ class FocusService : Service() {
                     Store.add(this,-1)
                     true
                 } else {
-                    TeamStore.spendTeamSecond(this)
+                    CloudTeams.spendSecond(this)
                 }
                 if(spent) {
                     ProgressStore.used(this,1)
