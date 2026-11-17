@@ -55,7 +55,7 @@ import androidx.compose.ui.unit.sp
         Text(if (mode == "plank") "Kitartott másodpercek: $count" else "Szabályosnak érzékelt ismétlések: $count",
             color = Color(0xFF7BE7C1), fontWeight = FontWeight.Bold, fontSize = 18.sp)
         Text("Minden " + CoachRewards.target(mode) + " " + CoachRewards.name(mode) +
-                " után +2 perc képernyőidő jár. A jutalmak a beállított egyenlegplafonig gyűlnek.",
+                " után +2 perc (fókuszmódban fekvő/guggolás/plank: +4 perc) jár. Az egyenlegplafon érvényes.",
             color=Color(0xFFFFC78D),fontSize=14.sp,fontWeight=FontWeight.Bold)
         if (rewardNote.isNotBlank()) Text(rewardNote,color=Color(0xFF7BE7C1),
             fontWeight=FontWeight.Bold)
