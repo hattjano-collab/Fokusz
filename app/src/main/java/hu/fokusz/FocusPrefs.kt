@@ -27,6 +27,7 @@ object FocusPrefs {
     private val focusAllowed = setOf(
         "com.google.android.googlequicksearchbox", "com.openai.chatgpt",
         "com.google.android.apps.classroom",
+        "com.duolingo", "com.application.xeropan",
         "com.android.settings", "com.android.systemui",
         "com.google.android.gms", "com.android.phone", "com.google.android.dialer",
         "com.android.dialer", "com.google.android.contacts",
