@@ -145,8 +145,9 @@ class FocusService : Service() {
             currentPackage in Store.BROWSERS
         val isSocial = FocusPrefs.blocked(this, currentPackage)
             || (locked && (currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL))
-        if (isSocial || browsersLocked) {
-            if (FocusPrefs.emergencyActive(this) && !QuestStore.isCustomTimerLocked(this)) {
+        val focusUnapproved = focusLocked && !FocusPrefs.allowedDuringFocus(this,currentPackage)
+        if (isSocial || browsersLocked || focusUnapproved) {
+            if (FocusPrefs.emergencyActive(this) && !QuestStore.isCustomTimerLocked(this) && !focusLocked) {
                 if (Store.bal(this) > 0) Store.add(this, -1)
                 ProgressStore.used(this, 1)
                 hideCover()
