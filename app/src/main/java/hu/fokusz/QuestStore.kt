@@ -197,7 +197,7 @@ object QuestStore {
         if(item !in listOf(CHESS,PUSH) || starterDone(c,item))return false
         if(starter(c,item).kind==QuestKind.CHESS && !ChessVerifier.isLinked(c))return false
         val previous=active(c)
-        if(previous in listOf(EXTRA,CUSTOM) || phase(c)==2)return false
+        if(previous in listOf(EXTRA,CUSTOM))return false
         if(previous==item)return true
         val state=sp(c)
         if(previous in listOf(CHESS,PUSH)) {
