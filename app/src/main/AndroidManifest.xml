@@ -24,13 +24,12 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
     <queries>
         <package android:name="com.duolingo"/>
+        <package android:name="com.application.xeropan"/>
     </queries>
     <application android:label="Fókusz" android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
-        <service android:name=".TeamSyncService" android:exported="false"
-            android:foregroundServiceType="connectedDevice"/>
         <service android:name=".FocusService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started screen-time monitoring and app limit overlay"/>
         </service>
