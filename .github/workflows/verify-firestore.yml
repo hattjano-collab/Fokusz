@@ -1,0 +1,25 @@
+name: Check Firestore Security Rules
+on:
+  push:
+    paths:
+      - 'firestore.rules'
+      - 'firebase.json'
+      - '.github/workflows/verify-firestore.yml'
+  workflow_dispatch:
+jobs:
+  firestore-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools@14
+      - name: Parse and validate rules in Firestore emulator
+        run: firebase emulators:exec --project demo-fokusz --only firestore "echo FIRESTORE_RULES_VALIDATED"
