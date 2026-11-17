@@ -441,8 +441,7 @@ object CloudTeams {
             if(!active(c))return@withContext "Előbb lépj be egy csapatba."
             if(seconds<=0)return@withContext "Adj meg pozitív percösszeget."
             val p=prefs(c)
-            if(pendingContribution(c))return@withContext
-                "Van egy folyamatban lévő átutalás. Előbb azt szinkronizáljuk."
+            if(pendingContribution(c))return@withContext "Van egy folyamatban lévő átutalás. Előbb azt szinkronizáljuk."
             val current=Store.bal(c)
             if(seconds>current)return@withContext "Nincs elég saját képernyőidőd."
             val uid=try{ensureAuth()}catch(e:Exception){
