@@ -285,7 +285,7 @@ object CloudTeams {
             lastReward=now
             io.launch{flushRewards(c.applicationContext)}
         }
-        if(Store.bal(c)<=0 && leased(c)<20)requestLease(c)
+        // Közös időt csak ténylegesen korlátozott app használatakor kérünk.
     }
     private suspend fun settle(c:Context) {
         if(!active(c))return
