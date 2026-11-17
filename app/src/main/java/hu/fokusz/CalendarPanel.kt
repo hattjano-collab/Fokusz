@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,6 +49,7 @@ import java.util.Locale
     var hour by remember {mutableStateOf("16")}
     var minute by remember {mutableStateOf("00")}
     var duration by remember {mutableStateOf("30")}
+    var weekly by remember {mutableStateOf(false)}
     var refresh by remember {mutableIntStateOf(0)}
     var permission by remember {mutableStateOf(CalendarStore.hasDevicePermission(ctx))}
     var note by remember {mutableStateOf("")}
@@ -58,6 +60,10 @@ import java.util.Locale
         CalendarStore.events(ctx,selected,selected)
     }
     val week=remember(refresh,permission) { CalendarStore.upcoming(ctx) }
+    val monday=selected.minusDays((selected.dayOfWeek.value-1).toLong())
+    val weekEvents=remember(selected,refresh,permission) {
+        CalendarStore.events(ctx,monday,monday.plusDays(6))
+    }
     val start=month.atDay(1)
     val offset=start.dayOfWeek.value-1
     val count=month.lengthOfMonth()
@@ -107,6 +113,36 @@ import java.util.Locale
             Text("Kijelölt nap: "+selected.format(DateTimeFormatter.ofPattern("yyyy. MM. dd. (EEEE)",Locale("hu"))),
                 color=Color(0xFF7BE7C1),fontSize=13.sp)
         }
+        FeatureBox("📅 HETI ÁTTEKINTÉS") {
+            Text("Koppints egy napra az eseményei és feladatai megnyitásához.",
+                color=Color(0xFFA7B4CC),fontSize=12.sp)
+            for(dayOffset in 0..6) {
+                val date=monday.plusDays(dayOffset.toLong())
+                val schedule=weekEvents.filter{it.time.toLocalDate()==date}
+                Row(Modifier.fillMaxWidth()
+                    .background(if(date==selected)Color(0xFF264D4D)
+                        else Color(0xFF203249),RoundedCornerShape(12.dp))
+                    .clickable{selected=date;month=YearMonth.from(date)}
+                    .padding(10.dp),
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Column(Modifier.width(68.dp)) {
+                        Text(date.format(DateTimeFormatter.ofPattern("EEE",Locale("hu"))),
+                            color=Color(0xFF7BE7C1),fontWeight=FontWeight.Bold)
+                        Text(date.format(DateTimeFormatter.ofPattern("MM.dd.")),
+                            color=Color(0xFFA7B4CC),fontSize=11.sp)
+                    }
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                        if(schedule.isEmpty())Text("Nincs esemény",color=Color(0xFFA7B4CC),fontSize=11.sp)
+                        schedule.take(3).forEach {event->
+                            Text(event.time.format(DateTimeFormatter.ofPattern("HH:mm"))+
+                                " · "+event.title,color=Color.White,fontSize=12.sp,maxLines=1)
+                        }
+                        if(schedule.size>3)Text("+"+(schedule.size-3)+" további",
+                            color=Color(0xFF7BE7C1),fontSize=11.sp)
+                    }
+                }
+            }
+        }
         FeatureBox("📌 ESEMÉNYEK – KIJELÖLT NAP") {
             if(events.isEmpty()) Text("Nincs esemény ezen a napon.",color=Color(0xFFA7B4CC))
             events.forEach { event ->
@@ -135,6 +171,10 @@ import java.util.Locale
                 OutlinedTextField(value=duration,onValueChange={if(it.length<=3&&it.all(Char::isDigit))duration=it},
                     modifier=Modifier.weight(1f),label={Text("Hossz (p)")},singleLine=true)
             }
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Checkbox(checked=weekly,onCheckedChange={weekly=it})
+                Text("Hetente ismétlődjön",color=Color.White,fontSize=13.sp)
+            }
             val h=hour.toIntOrNull()
             val m=minute.toIntOrNull()
             val d=duration.toIntOrNull()
@@ -142,7 +182,7 @@ import java.util.Locale
                 m!=null && m in 0..59 && d!=null && d in 5..600
             Button(onClick={
                 val at=LocalDateTime.of(selected.year,selected.monthValue,selected.dayOfMonth,h!!,m!!)
-                if(CalendarStore.add(ctx,title,at,d!!)){title="";note="Esemény elmentve.";refresh++}
+                if(CalendarStore.add(ctx,title,at,d!!,weekly)){title="";note=if(weekly)"Heti ismétlődő esemény mentve."else"Esemény elmentve.";refresh++}
             },enabled=valid,modifier=Modifier.fillMaxWidth(),
                 colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF7BE7C1),
                     contentColor=Color(0xFF091019))) {
