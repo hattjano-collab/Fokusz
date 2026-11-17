@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.sp
     var mode by remember { mutableStateOf("pushups") }
     var count by remember(mode) { mutableIntStateOf(CoachRewards.count(ctx,mode)) }
     var rewardNote by remember(mode) { mutableStateOf("") }
+    var rejected by remember(mode) { mutableIntStateOf(0) }
+    var lastReason by remember(mode) { mutableStateOf("") }
     var running by remember(mode) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("AI-MOZGÁSEDZŐ", color = Color(0xFFF5F7FF), fontSize = 24.sp,
@@ -57,6 +59,10 @@ import androidx.compose.ui.unit.sp
             color=Color(0xFFFFC78D),fontSize=14.sp,fontWeight=FontWeight.Bold)
         if (rewardNote.isNotBlank()) Text(rewardNote,color=Color(0xFF7BE7C1),
             fontWeight=FontWeight.Bold)
+        Text("✓ Elfogadott: " + count + "    •    ⚠ Javítandó testhelyzet: " + rejected,
+            color=Color(0xFFF5F7FF),fontSize=13.sp)
+        if(lastReason.isNotEmpty())Text("Tipp: " + lastReason,
+            color=Color(0xFFFFC78D),fontSize=12.sp)
         if (!running) {
             Button(onClick = {running=true}, modifier = Modifier.fillMaxWidth().height(50.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7BE7C1),
@@ -66,7 +72,10 @@ import androidx.compose.ui.unit.sp
             OutlinedButton(onClick = {running=false}, modifier = Modifier.fillMaxWidth()) {
                 Text("Kamera kikapcsolása")
             }
-            PushupCamera(-1000, mode = mode) {
+            PushupCamera(-1000, mode = mode, onIssue = { reason ->
+                rejected++
+                lastReason=reason
+            }) {
                 val result=CoachRewards.recognized(ctx,mode)
                 count=result.count
                 if(result.count % CoachRewards.target(mode)==0) {
