@@ -313,8 +313,20 @@ private val C = Color(0xFF273750)
                 }
             }
         }
+        FeatureCard("🔄 MEGSZAKÍTÁSVÉDELEM") {
+            Text("A folyamatban lévő tanulás, quest és időbank az újraindítás után is megmarad. A rendszer engedélyével a Fókusz a háttérvédelmet is újraindíthatja.",
+                color=M,fontSize=12.sp)
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text("Automatikus indítás újraindítás után",
+                    modifier=Modifier.weight(1f),color=W,fontSize=13.sp)
+                Switch(checked=FocusPrefs.autoRestart(ctx),
+                    onCheckedChange={FocusPrefs.setAutoRestart(ctx,it);refresh++})
+            }
+            Text("Egyes Android/HyperOS verziók blokkolhatják az automatikus indulást. Ilyenkor az alkalmazás értesítéssel kéri a kézi újraindítást.",
+                color=M,fontSize=11.sp)
+        }
         FeatureCard("🛡️ ADATVÉDELEM") {
-            Text("A questek, XP, statisztikák, blokkolási beállítások és a barátlista a telefonon maradnak.",
+            Text("A questek, XP, statisztikák, naptári események és beállítások a telefonon maradnak. A telefon naptárát csak külön engedéllyel olvassuk.",
                 color = M)
             Text("Az online sakkellenőrzés a megadott nyilvános felhasználónevet használja. A kameraelemzés helyben fut.",
                 color = M)
