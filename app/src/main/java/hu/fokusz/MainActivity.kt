@@ -289,9 +289,12 @@ class MainActivity : ComponentActivity() {
     var minutes by rememberSaveable { mutableStateOf("1") }
     var seconds by rememberSaveable { mutableStateOf("00") }
     var confirmAllIn by remember { mutableStateOf(false) }
-    val m = minutes.toIntOrNull()
-    val s = seconds.toIntOrNull()
-    val stake = if (m != null && s != null && m in 0..999 && s in 0..59) m * 60 + s else 0
+    val m = minutes.toLongOrNull()
+    val s = seconds.toLongOrNull()
+    val proposedStake=if(m!=null&&s!=null&&m>=0L&&s in 0L..59L)
+        m*60L+s else 0L
+    val stake=if(proposedStake in 1L..Store.MAX_SAFE_SECONDS.toLong())
+        proposedStake.toInt()else 0
     val wagerValid = stake > 0 && stake <= bal && GambleStats.canBet(ctx, stake)
 
     var selectedSide by remember { mutableStateOf("") }
@@ -344,7 +347,7 @@ class MainActivity : ComponentActivity() {
         // Minden dobásnál független, 50-50% esélyű véletlenszám.
         val result = if (Shoe.rnd.nextBoolean()) "Fej" else "Írás"
         val won = result == choice
-        if (won) Store.add(ctx, bet * 2)
+        if (won) Store.addUncapped(ctx,bet.toLong()*2L)
         bal = Store.bal(ctx)
         selectedSide = choice
         coinResult = result
@@ -360,31 +363,32 @@ class MainActivity : ComponentActivity() {
         if (hs.any { value(it.cards) <= 21 }) while (value(dc) < 17) dc.add(Shoe.draw())
         dealer = dc
         live = false
-        var paid = 0
-        var spent = 0
-        val dv = value(dc)
-        hands = hs.map { h ->
-            val pv = value(h.cards)
-            val payout = when {
-                pv > 21 -> 0
-                dv > 21 || pv > dv -> h.bet * 2
-                pv == dv -> h.bet
-                else -> 0
+        var paid=0L
+        var spent=0L
+        val dv=value(dc)
+        hands=hs.map{h->
+            val pv=value(h.cards)
+            val payout=when {
+                pv>21 -> 0L
+                dv>21 || pv>dv -> h.bet.toLong()*2L
+                pv==dv -> h.bet.toLong()
+                else -> 0L
             }
-            paid += payout
-            spent += h.bet
-            h.copy(res = when {
-                payout > h.bet -> "GYŐZELEM · +" + duration(h.bet)
-                payout == h.bet -> "DÖNTETLEN"
-                else -> "VESZTETT · −" + duration(h.bet)
+            paid+=payout;spent+=h.bet.toLong()
+            h.copy(res=when {
+                payout>h.bet.toLong() -> "GYŐZELEM · +"+duration(h.bet)
+                payout==h.bet.toLong() -> "DÖNTETLEN"
+                else -> "VESZTETT · −"+duration(h.bet)
             })
         }
-        Store.add(ctx, paid)
-        bal = Store.bal(ctx)
-        val difference = paid - spent
-        bjMessage = if (difference >= 0) "Kör eredménye: +" + duration(difference)
-                    else "Kör eredménye: −" + duration(abs(difference))
-        GambleStats.record(ctx,"Blackjack",difference)
+        Store.addUncapped(ctx,paid)
+        bal=Store.bal(ctx)
+        val difference=paid-spent
+        val shown=abs(difference).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt()
+        bjMessage=if(difference>=0)"Kör eredménye: +"+duration(shown)
+                  else "Kör eredménye: −"+duration(shown)
+        GambleStats.record(ctx,"Blackjack",difference.coerceIn(-Store.MAX_SAFE_SECONDS.toLong(),
+            Store.MAX_SAFE_SECONDS.toLong()).toInt())
     }
 
     fun next(hs: List<Hand>) {
@@ -406,16 +410,17 @@ class MainActivity : ComponentActivity() {
         val playerBJ = value(player) == 21
         val dealerBJ = value(dc) == 21
         if (playerBJ || dealerBJ) {
-            val paid = if (playerBJ && dealerBJ) bet else if (playerBJ) bet * 5 / 2 else 0
-            Store.add(ctx, paid)
+            val paid=if(playerBJ&&dealerBJ)bet.toLong()
+                     else if(playerBJ)bet.toLong()*5L/2L else 0L
+            Store.addUncapped(ctx,paid)
             live = false
             bjMessage = when {
                 playerBJ && dealerBJ -> "Mindkét fél blackjack · döntetlen"
-                playerBJ -> "BLACKJACK! +" + duration(paid - bet)
+                playerBJ -> "BLACKJACK! +" + duration((paid-bet).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt())
                 else -> "Az osztónak blackjackje van · −" + duration(bet)
             }
             hands = listOf(Hand(player, bet, done = true, res = bjMessage))
-            GambleStats.record(ctx,"Blackjack",paid-bet)
+            GambleStats.record(ctx,"Blackjack",(paid-bet).coerceIn(-Store.MAX_SAFE_SECONDS.toLong(),Store.MAX_SAFE_SECONDS.toLong()).toInt())
         } else {
             hands = listOf(Hand(player, bet))
             live = true
@@ -434,7 +439,7 @@ class MainActivity : ComponentActivity() {
     fun stand() { next(replaceHand(hands[active].copy(done = true))) }
     fun doubleDown() {
         val h = hands[active]
-        if (bal < h.bet || !GambleStats.reserve(ctx,h.bet)) return
+        if (bal < h.bet || h.bet>Store.MAX_SAFE_SECONDS/2 || !GambleStats.reserve(ctx,h.bet)) return
         Store.add(ctx, -h.bet)
         next(replaceHand(h.copy(cards = h.cards + Shoe.draw(), bet = h.bet * 2, done = true)))
     }
@@ -570,7 +575,7 @@ class MainActivity : ComponentActivity() {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = minutes,
-                        onValueChange = { if (it.length <= 3 && it.all(Char::isDigit)) minutes = it },
+                        onValueChange = { if (it.length <= 9 && it.all(Char::isDigit)) minutes = it },
                         label = { Text("Perc") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
