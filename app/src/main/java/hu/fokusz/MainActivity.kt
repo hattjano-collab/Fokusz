@@ -53,6 +53,10 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -137,7 +141,17 @@ data class Hand(
 )
 
 class MainActivity : ComponentActivity() {
+    private var requestedTab by mutableIntStateOf(-1)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if(intent.hasExtra("focus_tab"))
+            requestedTab=intent.getIntExtra("focus_tab",8)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        requestedTab=intent?.getIntExtra("focus_tab",-1) ?: -1
         super.onCreate(savedInstanceState)
         window.statusBarColor = android.graphics.Color.rgb(9,15,31)
         window.navigationBarColor = android.graphics.Color.rgb(9,15,31)
@@ -150,7 +164,7 @@ class MainActivity : ComponentActivity() {
                 onBackground = White,
                 onSurface = White
             )) {
-                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) { FokuszApp() }
+                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) { FokuszApp(requestedTab) }
             }
         }
     }
@@ -257,9 +271,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable fun FokuszApp() {
+@Composable fun FokuszApp(openTab:Int = -1) {
     val ctx = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(openTab) { if(openTab in 0..8) tab=openTab }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
@@ -458,7 +473,8 @@ class MainActivity : ComponentActivity() {
                         Triple(4,"◎","AI-edző"),
                         Triple(5,"◉","Fókuszmód"),
                         Triple(6,"⚙","Beállítások"),
-                        Triple(7,"▦","Naptár")
+                        Triple(7,"▦","Naptár"),
+                        Triple(8,"🔥","Duolingo")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -501,7 +517,7 @@ class MainActivity : ComponentActivity() {
                 Text("☰  MENÜ",fontWeight=FontWeight.Bold)
             }
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
-                "AI-edző","Fókuszmód","Beállítások","Naptár").getOrElse(tab) { "Fókusz" },
+                "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
@@ -738,9 +754,11 @@ class MainActivity : ComponentActivity() {
             OptionsPanel()
         } else if (tab == 7) {
             CalendarPanel()
+        } else if(tab == 8) {
+            DuolingoPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.3", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.4", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
