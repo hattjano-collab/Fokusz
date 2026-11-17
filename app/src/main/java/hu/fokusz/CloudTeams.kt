@@ -506,6 +506,33 @@ object CloudTeams {
         }
     }
 
+    /** A közös idő egy részét bármely tag áthelyezheti a közös bankba.
+     * Nem ad hozzá új időt; csak átmozgatja, Firestore-tranzakcióval.
+     */
+    suspend fun movePoolToBank(c:Context,seconds:Int):String =
+        withContext(Dispatchers.IO){
+            if(!active(c))return@withContext "Nem vagy csapattag."
+            if(seconds<=0)return@withContext "Adj meg pozitív percösszeget."
+            try {
+                val uid=ensureAuth()
+                val success=db().runTransaction{tx->
+                    val ref=teamRef(c)
+                    val snap=tx.get(ref)
+                    val members=snap.get("members") as? Map<*,*>
+                    if(members==null || uid !in members)return@runTransaction false
+                    val pool=snap.getLong("pool")?:0L
+                    val bank=snap.getLong("bank")?:0L
+                    if(seconds.toLong()>pool||
+                        bank+seconds>MAX_BANK.toLong())return@runTransaction false
+                    tx.update(ref,mapOf("pool" to pool-seconds,
+                        "bank" to bank+seconds))
+                    true
+                }.await()
+                if(success)"✓ "+duration(seconds)+" átkerült a közös bankba."
+                else "A közös keretben nincs ennyi felhasználható idő."
+            }catch(e:Exception){"Átvezetési hiba: "+(e.localizedMessage?:"Firebase-hiba")}
+        }
+
     suspend fun claimBoss(c:Context):String=withContext(Dispatchers.IO) {
         if(!active(c))return@withContext "Nem vagy csapattag."
         try {
