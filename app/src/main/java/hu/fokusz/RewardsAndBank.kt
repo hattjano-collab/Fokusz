@@ -60,7 +60,7 @@ object BossQuest {
         return d.get(week.weekBasedYear()).toString()+"-"+d.get(week.weekOfWeekBasedYear())
     }
     fun progress(c:Context):Triple<Int,Int,Int> =
-        Triple(ProgressStore.weekReps(c),ChessVerifier.weekGames(c),ProgressStore.weekStudy(c))
+        Triple(ProgressStore.weekPushups(c),ChessVerifier.weekGames(c),ProgressStore.weekStudy(c))
     fun ready(c:Context):Boolean {
         val (reps,chess,study)=progress(c)
         return reps>=100 && chess>=10 && study>=10800 && sp(c).getString("claimed","")!=weekKey()
