@@ -443,9 +443,14 @@ private val QLILAC = Color(0xFFB9AAFF)
                         QPrimary("KAMERÁS SZÁMLÁLÓ INDÍTÁSA") { cameraOn = true }
                     } else {
                         QSecondary("Kamera kikapcsolása") { cameraOn = false }
-                        PushupCamera(quest.id, mode = quest.mode) {
-                            QuestStore.rep(ctx, quest.id)
+                        val onRep:()->Unit={
+                            QuestStore.rep(ctx,quest.id)
                             update()
+                        }
+                        if(quest.mode=="pushups") {
+                            WebPushupCamera(questId=quest.id,onRep=onRep)
+                        }else {
+                            PushupCamera(quest.id,mode=quest.mode,onRep=onRep)
                         }
                     }
                     Text("A kamerás testtartás-felismerés becslés; nem garantálható, hogy minden szabálytalan ismétlést felismer.",
