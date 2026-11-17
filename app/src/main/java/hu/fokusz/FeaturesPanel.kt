@@ -24,6 +24,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -159,66 +160,92 @@ private val C = Color(0xFF273750)
             Text("Szintlépéssel új színtémák nyílnak meg a Beállításokban.",
                 color = M, fontSize = 12.sp)
         }
+        ExtraStatsPanel()
     }
 }
 
-@Composable fun FocusPanel(serviceOn: Boolean, usageOk: Boolean, overlayOk: Boolean, openTimeTab: () -> Unit) {
-    val ctx = LocalContext.current
-    var selected by remember { mutableIntStateOf(1500) }
-    var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { while (true) { delay(1000);refresh++ } }
-    val ready = serviceOn && usageOk && overlayOk
-    val phase = FocusPrefs.focusPhase(ctx)
-    val left = FocusPrefs.focusLeft(ctx)
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("MÉLYFÓKUSZ", color = W, fontSize = 24.sp, fontWeight = FontWeight.Black)
-        FeatureCard("📖 KONCENTRÁLT TANULÁS") {
-            Text("Tanulj 25 vagy 50 percet. Közben a közösségi appok és az ismert böngészők is zárolva vannak.",
-                color = M)
-            if (phase == 0) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(1500,3000).forEach { value ->
-                        OutlinedButton(onClick = { selected = value },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected == value) A else M)) {
-                            Text((value/60).toString() + " perc")
+@Composable fun FocusPanel(serviceOn:Boolean,usageOk:Boolean,overlayOk:Boolean,openTimeTab:()->Unit) {
+    val ctx=LocalContext.current
+    var selected by remember {mutableIntStateOf(25)}
+    var refresh by remember {mutableIntStateOf(0)}
+    LaunchedEffect(Unit){while(true){delay(1000);refresh++}}
+    val ready=serviceOn&&usageOk&&overlayOk
+    val phase=FocusPrefs.focusPhase(ctx)
+    val left=FocusPrefs.focusLeft(ctx)
+    Column(verticalArrangement=Arrangement.spacedBy(16.dp)) {
+        Text("MÉLYFÓKUSZ",color=W,fontSize=24.sp,fontWeight=FontWeight.Black)
+        FeatureCard("📚 TANULÁS – RUGALMAS IDŐZÍTŐ") {
+            Text("15–120 perc közül választasz. A valóban teljesített idő felét képernyőidőként megkapod.",
+                color=M)
+            if(phase==0) {
+                Text(selected.toString()+" perc tanulás",color=A,fontSize=23.sp,
+                    fontWeight=FontWeight.Bold)
+                Slider(value=selected.toFloat(),onValueChange={
+                    selected=(it.toInt()/5*5).coerceIn(15,120)
+                },valueRange=15f..120f,steps=20)
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    listOf(25,50,90).forEach { minute ->
+                        OutlinedButton(onClick={selected=minute},
+                            modifier=Modifier.weight(1f),
+                            colors=ButtonDefaults.outlinedButtonColors(
+                                contentColor=if(selected==minute) A else M)) {
+                            Text(minute.toString()+" p")
                         }
                     }
                 }
-                Text("Jutalom: +" + duration(selected/3) + " képernyőidő + XP.",
-                    color = A)
-                if (!ready) {
-                    Text("A kezdéshez indítsd el az engedélyezett háttérvédelmet!",
-                        color = M)
-                    SmallSecondary("Képernyőidő-beállítások") { openTimeTab() }
-                } else {
-                    FeatureButton("TANULÁS INDÍTÁSA") { FocusPrefs.startFocus(ctx, selected);refresh++ }
+                Text("Jutalom: +"+duration(selected*30)+" képernyőidő + XP",
+                    color=A,fontSize=17.sp,fontWeight=FontWeight.Bold)
+                val remaining=CalendarStore.nextEventMinutes(ctx)
+                if(remaining!=null && remaining<selected.toLong()) {
+                    Text("📅 A következő naptári eseményed "+remaining+" perc múlva kezdődik. Érdemes rövidebb blokkot választani.",
+                        color=Color(0xFFFFC78D),fontSize=12.sp)
                 }
-            } else if (phase == 1) {
-                Text(clock(left), color = W, fontSize = 50.sp,
-                    fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth())
-                LinearProgressIndicator(progress = {
-                    (1f - left.toFloat() / FocusPrefs.focusTarget(ctx)).coerceIn(0f,1f)
-                }, modifier = Modifier.fillMaxWidth().height(9.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-                    color = A, trackColor = C)
-                if (!ready) Text("A védelem leállt. Az időzítő csak bekapcsolt háttérvédelemmel halad.",
-                    color = Color(0xFFFFC78D))
-                if (left == 0) FeatureButton("KÉSZ VAGYOK  •  JUTALOM") {
-                    FocusPrefs.claimFocus(ctx); refresh++
+                if(!ready) {
+                    Text("A tanuló módhoz engedélyezett háttérvédelem kell.",color=M)
+                    SmallSecondary("Védelem és engedélyek") {openTimeTab()}
+                } else {
+                    FeatureButton("TANULÁS INDÍTÁSA") {
+                        FocusPrefs.startFocus(ctx,selected*60);refresh++
+                    }
+                }
+            } else if(phase==1) {
+                Text(if(FocusPrefs.focusPaused(ctx)) "☕ OKOS SZÜNET" else "TANULÁS FOLYAMATBAN",
+                    color=if(FocusPrefs.focusPaused(ctx))Color(0xFFFFC78D) else A,
+                    fontWeight=FontWeight.Bold)
+                Text(clock(left),color=W,fontSize=58.sp,fontWeight=FontWeight.ExtraBold,
+                    modifier=Modifier.fillMaxWidth(),textAlign=TextAlign.Center)
+                LinearProgressIndicator(progress={
+                    (1f-left.toFloat()/FocusPrefs.focusTarget(ctx)).coerceIn(0f,1f)
+                },color=A,trackColor=C,modifier=Modifier.fillMaxWidth().height(10.dp)
+                    .clip(RoundedCornerShape(9.dp)))
+                Text("Szünetből felhasznált: "+FocusPrefs.pauseUsed(ctx)+"/300 mp",
+                    color=M,fontSize=12.sp)
+                if(left>0){
+                    SmallSecondary(if(FocusPrefs.focusPaused(ctx))
+                        "TANULÁS FOLYTATÁSA" else "5 PERCES SZÜNETKERET",
+                        enabled=FocusPrefs.focusPaused(ctx)||FocusPrefs.pauseUsed(ctx)<300) {
+                        FocusPrefs.togglePause(ctx);refresh++
+                    }
+                }
+                Text("A közösségi appok szünet közben is tiltva maradnak. Google kereső, ChatGPT és rendszerfunkciók elérhetők.",
+                    color=M,fontSize=12.sp)
+                if(!ready)Text("A háttérvédelem leállt: az időzítő szünetel. A feladatot megőrizzük.",
+                    color=Color(0xFFFFC78D),fontSize=12.sp)
+                if(left==0) FeatureButton("TANULÁS KÉSZ – JUTALOM ÁTVÉTELE") {
+                    FocusPrefs.claimFocus(ctx);refresh++
                 }
             } else {
-                Text("✓ Fókuszblokk teljesítve! Jutalom jóváírva.", color = A)
-                FeatureButton("ÚJ FÓKUSZBLOKK") { FocusPrefs.clearFocus(ctx);refresh++ }
+                Text("✓ A tanulás teljesítve, a jutalmat jóváírtuk.",color=A)
+                FeatureButton("ÚJ TANULÁSI BLOKK") {FocusPrefs.clearFocus(ctx);refresh++}
             }
         }
-        FeatureCard("TIPPEK") {
-            Text("• Készíts elő minden tanulnivalót a kezdés előtt.", color = M)
-            Text("• A blokk idején ne használd a telefont.", color = M)
-            Text("• Ha a Xiaomi bezárja a Fókusz háttérszolgáltatását, az időzítő szünetel.",
-                color = M)
+        FeatureCard("🛡️ SZIGORÚ FÓKUSZ – FONTOS") {
+            Text("A figyelt social appok és az ismert böngészők zárolva vannak az időzítés alatt. A Google alkalmazás, ChatGPT és alapvető rendszerfunkciók nem kerülnek a tiltólistára.",
+                color=M,fontSize=12.sp)
+            Text("A telefon nem teszi lehetővé, hogy pusztán alkalmazáshasználati engedéllyel minden weboldalt ellenőrizzünk, ezért a korlátozás nem megkerülhetetlen.",
+                color=M,fontSize=11.sp)
+            Text("Az edző a ☰ menüből a tanulás alatt is megnyitható, a social appok közben tiltva maradnak.",
+                color=A,fontSize=12.sp)
         }
     }
 }
