@@ -187,7 +187,7 @@ private fun teamQR(value:String):android.graphics.Bitmap?=try {
                     color=TY,fontSize=11.sp,fontWeight=FontWeight.Bold)
                 Text(TeamNearby.status,color=if(TeamNearby.connected)TC else TM,fontSize=12.sp)
                 if(!TeamSyncService.isRunning||!perms) {
-                    Button(onClick={startSync},modifier=Modifier.fillMaxWidth(),
+                    Button(onClick={startSync()},modifier=Modifier.fillMaxWidth(),
                         colors=ButtonDefaults.buttonColors(containerColor=TC,
                             contentColor=Color(0xFF10202B))) {
                         Text("SZINKRON INDÍTÁSA")
