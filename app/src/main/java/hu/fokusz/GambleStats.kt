@@ -26,7 +26,8 @@ object GambleStats {
     @Synchronized fun reserve(c:Context,amount:Int):Boolean {
         if(!canBet(c,amount))return false
         val s=sp(c)
-        s.edit().putInt("staked",s.getInt("staked",0)+amount).commit()
+        s.edit().putInt("staked",(s.getInt("staked",0).toLong()+amount)
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).commit()
         return true
     }
     /** Az eredményt a tét levonása és a kifizetés után rögzítjük. */
