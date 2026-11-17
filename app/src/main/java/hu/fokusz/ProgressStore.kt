@@ -74,6 +74,8 @@ object ProgressStore {
             .apply()
         earned(c, reward)
         updateWidget(c)
+        // Minden ténylegesen befejezett személyes quest egyszer +5 percet ad a csapatnak.
+        TeamStore.questCompleted(c)
     }
 
     fun xp(c: Context) = sp(c).getInt("xp", 0)
