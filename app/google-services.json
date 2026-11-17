@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "245654415937",
+    "project_id": "fokusz-24aa1",
+    "storage_bucket": "fokusz-24aa1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:245654415937:android:d935e8b17cabb6d3b474c0",
+        "android_client_info": {
+          "package_name": "hu.fokusz"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC09YZfDVrEKfttzlgcwzF4QaHA5sYMEKI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
