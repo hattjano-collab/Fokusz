@@ -597,9 +597,7 @@ class MainActivity : ComponentActivity() {
                 if (!wagerValid) {
                     Text(
                         if (stake <= 0) "Adj meg érvényes tétet (0–59 mp másodpercmező)!"
-                        else if(stake>GambleStats.SINGLE_STAKE_LIMIT) "Egy körben legfeljebb 10 percet tehetsz fel."
-                        else if(stake>GambleStats.remaining(ctx)) "Mára elfogyott a 30 perces játék-tétkereted."
-                        else "Ehhez a téthez nincs elegendő időegyenleged.",
+                        else "Ehhez a téthez nincs elegendő saját időegyenleged.",
                         color = Gold, fontSize = 12.sp
                     )
                 }
