@@ -258,7 +258,10 @@ private val C = Color(0xFF273750)
     val level = ProgressStore.level(ctx)
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("BEÁLLÍTÁSOK", color = W, fontSize = 23.sp, fontWeight = FontWeight.Black)
-        FeatureCard("♟️ KÖTELEZŐ SAKKFÓKUSZ") {
+        FeatureCard("⭐ NAPI ALAPQUESTEK BEÁLLÍTÁSA") {
+            BaseQuestSettings()
+        }
+        FeatureCard("♟️ SAKKFÓKUSZ (HA KIVÁLASZTOD)") {
             ChessAccountPanel()
         }
         FeatureCard("🔒 SAJÁT BLOKKLISTA") {
