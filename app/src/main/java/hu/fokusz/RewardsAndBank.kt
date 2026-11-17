@@ -5,34 +5,75 @@ import java.time.LocalDate
 import java.time.temporal.WeekFields
 import java.util.Locale
 
-/** Későbbi napra eltett, nem szerencsejátékhoz kötött időkeret. */
+/** Virtuális időbank: naponta egyszer 10% bónusz, legfeljebb 120 percig.
+ * A ma berakott pénz csak a következő naptári napon elérhető.
+ * A felhalmozás az utolsó elszámolási naptól a mai napig felzárkózik. */
 object TimeBank {
     private fun sp(c:Context)=c.getSharedPreferences("fokusz_timebank_v1",0)
-    private const val MAX_TOTAL=7200
-    private const val MAX_DAILY_DEPOSIT=1800
+    const val MAX_TOTAL=7200
+    const val MAX_DAILY_DEPOSIT=1800
+    const val DAILY_PERCENT=10
 
     @Synchronized private fun settle(c:Context) {
         val s=sp(c)
-        val current=LocalDate.now().toString()
-        val date=s.getString("pendingDay","") ?: ""
-        if(date.isNotEmpty() && date!=current) {
-            s.edit()
-                .putInt("ready",(s.getInt("ready",0)+s.getInt("pending",0)).coerceAtMost(MAX_TOTAL))
-                .putInt("pending",0).putString("pendingDay","").apply()
+        val today=LocalDate.now()
+        val old=s.getString("lastSettledDate","")
+        var last=try { LocalDate.parse(old) } catch(_:Exception) {
+            val saved= s.getString("pendingDay","")
+                ?.takeIf{it.isNotBlank()} ?: s.getString("depositDay","")
+            try{ LocalDate.parse(saved)}catch(_:Exception){today}
         }
-        if(s.getString("depositDay","")!=current) {
-            s.edit().putString("depositDay",current).putInt("depositedToday",0).apply()
+        if(last.isAfter(today))last=today
+        var ready=s.getInt("ready",0).coerceIn(0,MAX_TOTAL)
+        var pending=s.getInt("pending",0).coerceIn(0,MAX_TOTAL-ready)
+        var interestToday=if(old==today.toString())s.getInt("lastInterestAwarded",0)else 0
+        var days=0
+        while(last.isBefore(today) && days < 366) {
+            last=last.plusDays(1);days++
+            ready=(ready+pending).coerceAtMost(MAX_TOTAL)
+            pending=0
+            val earned= (ready/10).coerceAtMost(MAX_TOTAL-ready)
+            ready+=earned
+            if(last==today)interestToday=earned
         }
+        // A korábbi verziók függő befizetését is rendezzük.
+        if(days==0 && pending>0) {
+            val pendingDate=try{LocalDate.parse(s.getString("pendingDay",""))}
+                catch(_:Exception){today}
+            if(pendingDate.isBefore(today)) {
+                ready=(ready+pending).coerceAtMost(MAX_TOTAL)
+                pending=0
+            }
+        }
+        val depositDay=s.getString("depositDay","")
+        s.edit().putInt("ready",ready).putInt("pending",pending)
+            .putString("pendingDay",if(pending>0)today.toString()else "")
+            .putString("lastSettledDate",today.toString())
+            .putInt("lastInterestAwarded",interestToday)
+            .putString("depositDay",today.toString())
+            .putInt("depositedToday",if(depositDay==today.toString())
+                s.getInt("depositedToday",0) else 0).commit()
     }
     @Synchronized fun ready(c:Context):Int {settle(c);return sp(c).getInt("ready",0)}
     @Synchronized fun waiting(c:Context):Int {settle(c);return sp(c).getInt("pending",0)}
+    @Synchronized fun earnedToday(c:Context):Int {settle(c);return sp(c).getInt("lastInterestAwarded",0)}
+    @Synchronized fun projectedTomorrow(c:Context):Int {
+        settle(c)
+        val value=(ready(c)+waiting(c)).coerceAtMost(MAX_TOTAL)
+        return (value+minOf(value/10,MAX_TOTAL-value)).coerceAtMost(MAX_TOTAL)
+    }
+    @Synchronized fun projectedInterest(c:Context):Int {
+        settle(c)
+        return projectedTomorrow(c)-ready(c)-waiting(c)
+    }
     @Synchronized fun remainingDaily(c:Context):Int {
-        settle(c);return (MAX_DAILY_DEPOSIT-sp(c).getInt("depositedToday",0)).coerceAtLeast(0)
+        settle(c)
+        return (MAX_DAILY_DEPOSIT-sp(c).getInt("depositedToday",0)).coerceAtLeast(0)
     }
     @Synchronized fun deposit(c:Context,seconds:Int):Boolean {
         settle(c)
-        if(seconds !in listOf(300,900) || remainingDaily(c)<seconds
-            || Store.bal(c)<seconds || ready(c)+waiting(c)+seconds>MAX_TOTAL) return false
+        if(seconds !in listOf(300,900) || remainingDaily(c)<seconds ||
+            Store.bal(c)<seconds || ready(c)+waiting(c)+seconds>MAX_TOTAL)return false
         val s=sp(c)
         Store.add(c,-seconds)
         s.edit().putInt("pending",s.getInt("pending",0)+seconds)
@@ -42,10 +83,9 @@ object TimeBank {
     }
     @Synchronized fun withdraw(c:Context,seconds:Int):Boolean {
         settle(c)
-        if(seconds !in listOf(300,900) || ready(c)<seconds
-            || Store.bal(c)+seconds>FocusPrefs.maxBalance(c)) return false
-        val s=sp(c)
-        s.edit().putInt("ready",s.getInt("ready",0)-seconds).commit()
+        if(seconds !in listOf(300,900) || ready(c)<seconds ||
+            Store.bal(c)+seconds>FocusPrefs.maxBalance(c))return false
+        sp(c).edit().putInt("ready",sp(c).getInt("ready",0)-seconds).commit()
         Store.add(c,seconds)
         return true
     }
