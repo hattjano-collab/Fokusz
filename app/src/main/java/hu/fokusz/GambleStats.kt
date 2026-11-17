@@ -8,13 +8,10 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /** Kizárólag virtuális képernyőidővel játszható mini-játékok összesítője.
- * Visszafogott napi tétlimit és nyílt valószínűségek, valódi pénz nélkül.
+ * A teljes rendelkezésre álló időegyenleg feltehető; valódi pénz soha.
  */
 object GambleStats {
     private fun sp(c:Context)=c.getSharedPreferences("fokusz_gambling_v3",Context.MODE_PRIVATE)
-    const val DAILY_STAKE_LIMIT=1800  // 30 perc
-    const val SINGLE_STAKE_LIMIT=600  // 10 perc
-
     @Synchronized private fun today(c:Context) {
         val s=sp(c)
         val now=LocalDate.now().toString()
@@ -24,9 +21,8 @@ object GambleStats {
         }
     }
     @Synchronized fun staked(c:Context):Int {today(c);return sp(c).getInt("staked",0)}
-    @Synchronized fun remaining(c:Context):Int=(DAILY_STAKE_LIMIT-staked(c)).coerceAtLeast(0)
     @Synchronized fun canBet(c:Context,amount:Int):Boolean =
-        amount in 1..SINGLE_STAKE_LIMIT && amount<=remaining(c) && amount<=Store.bal(c)
+        amount > 0 && amount <= Store.bal(c)
     @Synchronized fun reserve(c:Context,amount:Int):Boolean {
         if(!canBet(c,amount))return false
         val s=sp(c)
