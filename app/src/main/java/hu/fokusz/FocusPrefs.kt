@@ -63,9 +63,20 @@ object FocusPrefs {
     @Synchronized fun startFocus(c: Context, seconds: Int): Boolean {
         if (focusPhase(c) == 1) return false
         if (QuestStore.isTimerLocked(c)) return false
-        if (seconds !in 900..3600) return false
+        if (seconds !in 900..7200) return false
         focus(c).edit().putInt("phase", 1).putInt("target", seconds).putLong("elapsed", 0)
+            .putBoolean("paused",false).putLong("pauseSpent",0L)
             .putLong("last", SystemClock.elapsedRealtime()).commit()
+        return true
+    }
+    fun focusPaused(c:Context):Boolean=focus(c).getBoolean("paused",false)
+    fun pauseUsed(c:Context):Int=(focus(c).getLong("pauseSpent",0L)/1000L).toInt()
+    @Synchronized fun togglePause(c:Context):Boolean {
+        if(focusPhase(c)!=1 || focusLeft(c)==0) return false
+        val s=focus(c)
+        if(!focusPaused(c) && pauseUsed(c)>=300) return false
+        s.edit().putBoolean("paused",!focusPaused(c))
+            .putLong("last",SystemClock.elapsedRealtime()).commit()
         return true
     }
     @Synchronized fun tick(c: Context) {
@@ -74,8 +85,14 @@ object FocusPrefs {
         val now = SystemClock.elapsedRealtime()
         val last = s.getLong("last", 0L)
         val delta = if (last > 0 && now >= last) (now - last).coerceIn(0, 1500) else 0
-        val elapsed = (s.getLong("elapsed", 0) + delta).coerceAtMost(focusTarget(c) * 1000L)
-        s.edit().putLong("elapsed", elapsed).putLong("last", now).apply()
+        if(focusPaused(c)) {
+            val paused=(s.getLong("pauseSpent",0L)+delta).coerceAtMost(300000L)
+            s.edit().putLong("pauseSpent",paused).putLong("last",now)
+                .putBoolean("paused",paused<300000L).apply()
+        } else {
+            val elapsed = (s.getLong("elapsed", 0L) + delta).coerceAtMost(focusTarget(c) * 1000L)
+            s.edit().putLong("elapsed", elapsed).putLong("last", now).apply()
+        }
     }
     @Synchronized fun resetClock(c: Context) {
         if (focusPhase(c) == 1) focus(c).edit().putLong("last", SystemClock.elapsedRealtime()).apply()
@@ -86,7 +103,7 @@ object FocusPrefs {
     @Synchronized fun claimFocus(c: Context): Boolean {
         if (focusPhase(c) != 1 || focusLeft(c) > 0) return false
         focus(c).edit().putInt("phase", 2).commit()
-        val reward = focusTarget(c) / 3
+        val reward = focusTarget(c) / 2
         Store.add(c, reward)
         ProgressStore.taskFinished(c, "STUDY", focusTarget(c), reward)
         return true
