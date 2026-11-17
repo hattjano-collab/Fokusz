@@ -80,5 +80,19 @@ try {
     bossTargetPush:600,bossTargetChess:60,bossTargetStudy:64800
   }));
   console.log("PASS combined Boss reward is collectible once with cooldown");
+  const giftId=guest+"_c745bd6a-3d73-475a-9baf-00281b930121";
+  const giftBatch=writeBatch(guestDb);
+  giftBatch.update(guestDoc,{bank:90000,lastRewardEvent:giftId});
+  giftBatch.set(doc(guestDb,"teams",groupId,"events",giftId),{
+    uid:guest,amount:90000,createdAt:serverTimestamp()
+  });
+  await assertSucceeds(giftBatch.commit());
+  console.log("PASS member can deposit more than 24 hours of virtual time into team bank");
+  await assertFails(updateDoc(guestDoc,{bank:180000}));
+  console.log("PASS bank cannot be increased without an idempotent matching receipt");
+  await assertSucceeds(updateDoc(groupDoc,{pool:2070,bank:91200}));
+  console.log("PASS member can transfer pool minutes to bank without creating time");
+  await assertFails(updateDoc(groupDoc,{pool:2070,bank:94000}));
+  console.log("PASS pool-to-bank transfer cannot mint extra minutes");
   console.log("FIRESTORE_RULES_VALIDATED");
 }finally {await environment.cleanup();}
