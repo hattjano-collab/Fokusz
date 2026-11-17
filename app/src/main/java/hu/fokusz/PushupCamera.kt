@@ -49,72 +49,60 @@ import kotlin.math.sqrt
 
 data class PoseFeedback(val message: String, val rep: Boolean = false)
 
+/** A számláló és a webes edzésazonos döntési logikája:
+ * váll–könyök–csukló, 120° lent, 145° fent, nem kell teljes test.
+ */
 private class PushupCounter {
-    private var stage = 0 // várjuk a fent -> lent -> fent sorozatot
-    private var stableFrames = 0
-
-    private fun angle(a: PointF, b: PointF, c: PointF): Double {
-        val abx = (a.x - b.x).toDouble()
-        val aby = (a.y - b.y).toDouble()
-        val cbx = (c.x - b.x).toDouble()
-        val cby = (c.y - b.y).toDouble()
-        val norm = sqrt(abx * abx + aby * aby) * sqrt(cbx * cbx + cby * cby)
-        return if (norm < 0.001) 0.0 else Math.toDegrees(
-            acos(((abx * cbx + aby * cby) / norm).coerceIn(-1.0, 1.0))
-        )
+    private var stage=0 // 0: indulás, 1: fenti helyzet, 2: lent volt
+    private var lastRepAt=0L
+    private fun angle(a:PointF,b:PointF,c:PointF):Double {
+        val abx=(a.x-b.x).toDouble();val aby=(a.y-b.y).toDouble()
+        val cbx=(c.x-b.x).toDouble();val cby=(c.y-b.y).toDouble()
+        val norm=sqrt(abx*abx+aby*aby)*sqrt(cbx*cbx+cby*cby)
+        return if(norm<.001)0.0 else Math.toDegrees(
+            acos(((abx*cbx+aby*cby)/norm).coerceIn(-1.0,1.0)))
     }
-
-    fun analyze(pose: Pose): PoseFeedback {
-        val left = listOf(PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_ELBOW,
-            PoseLandmark.LEFT_WRIST, PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_ANKLE)
-        val right = listOf(PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_ELBOW,
-            PoseLandmark.RIGHT_WRIST, PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_ANKLE)
-        fun fetch(ids: List<Int>) = ids.map { pose.getPoseLandmark(it) }
-        val ls = fetch(left)
-        val rs = fetch(right)
-        val side = if (ls.sumOf { (it?.inFrameLikelihood ?: 0f).toDouble() } >=
-            rs.sumOf { (it?.inFrameLikelihood ?: 0f).toDouble() }) ls else rs
-        if (side.any { it == null || it.inFrameLikelihood < .62f }) {
-            stableFrames = 0
-            return PoseFeedback("Mutasd a teljes tested oldalról, fejtől lábig!")
+    fun analyze(pose:Pose):PoseFeedback {
+        val left=listOf(PoseLandmark.LEFT_SHOULDER,PoseLandmark.LEFT_ELBOW,
+            PoseLandmark.LEFT_WRIST)
+        val right=listOf(PoseLandmark.RIGHT_SHOULDER,PoseLandmark.RIGHT_ELBOW,
+            PoseLandmark.RIGHT_WRIST)
+        fun arm(ids:List<Int>)=ids.map{pose.getPoseLandmark(it)}
+        val a=arm(left);val b=arm(right)
+        fun score(points:List<com.google.mlkit.vision.pose.PoseLandmark?>)=
+            if(points.any{it==null || it.inFrameLikelihood<.38f})0.0
+            else points.sumOf{(it?.inFrameLikelihood?:0f).toDouble()}
+        val usable=if(score(a)>=score(b))a else b
+        if(score(usable)==0.0) {
+            return PoseFeedback("Elég, ha az egyik karod látszik: váll, könyök és csukló.")
         }
-        val shoulder = side[0]!!.position
-        val elbow = side[1]!!.position
-        val wrist = side[2]!!.position
-        val hip = side[3]!!.position
-        val ankle = side[4]!!.position
-        if (abs(shoulder.x - ankle.x) < abs(shoulder.y - ankle.y) * 1.15f ||
-            abs(shoulder.x - ankle.x) < 80f) {
-            stableFrames = 0
-            return PoseFeedback("A fekvő teljes hossza látszódjon a kamerában!")
+        val shoulder=usable[0]!!.position
+        val elbow=usable[1]!!.position
+        val wrist=usable[2]!!.position
+        val armAngle=angle(shoulder,elbow,wrist)
+        if(armAngle==0.0) return PoseFeedback("Kicsit mozdítsd el a kamerát a karod mellől.")
+        if(stage==0) {
+            if(armAngle>=145.0)stage=1
+            return PoseFeedback("Indulj fent, közel nyújtott karral. ("+armAngle.toInt()+"°)")
         }
-        val spine = angle(shoulder, hip, ankle)
-        if (spine < 154.0) {
-            stableFrames = 0
-            return PoseFeedback("Egyenes törzs és csípő szükséges. (Most: " + spine.toInt() + "°)")
+        if(stage==1) {
+            if(armAngle<=120.0) {
+                stage=2
+                return PoseFeedback("Szuper, elég mély! Most nyomd fel magad.")
+            }
+            return PoseFeedback("Hajlítsd a könyököd 120°-ig. ("+armAngle.toInt()+"°)")
         }
-        val arm = angle(shoulder, elbow, wrist)
-        if (stage == 0) {
-            stableFrames = if (arm >= 155.0) stableFrames + 1 else 0
-            if (stableFrames >= 2) { stage = 1; stableFrames = 0 }
-            return PoseFeedback("Kezdj nyújtott karral. (" + arm.toInt() + "°)")
+        if(armAngle>=145.0) {
+            stage=1
+            val now=SystemClock.elapsedRealtime()
+            if(now-lastRepAt>=450L) {
+                lastRepAt=now
+                return PoseFeedback("Fekvőtámasz +1! ("+armAngle.toInt()+"°)",true)
+            }
         }
-        if (stage == 1) {
-            stableFrames = if (arm in 45.0..103.0) stableFrames + 1 else 0
-            if (stableFrames >= 2) { stage = 2; stableFrames = 0 }
-            return PoseFeedback(if (stage == 2) "Megvan a mély pont! Nyomd vissza magad."
-                else "Engedd le magad kb. 90°-os könyökig. (" + arm.toInt() + "°)")
-        }
-        stableFrames = if (arm >= 155.0) stableFrames + 1 else 0
-        if (stableFrames >= 2) {
-            stage = 1
-            stableFrames = 0
-            return PoseFeedback("Szabályos fekvőtámasz! +1", true)
-        }
-        return PoseFeedback("Nyomd ki magad teljesen. (" + arm.toInt() + "°)")
+        return PoseFeedback("Nyomd fel magad 145° fölé. ("+armAngle.toInt()+"°)")
     }
 }
-
 @OptIn(ExperimentalGetImage::class)
 @Composable fun PushupCamera(questId: Int, mode: String = "pushups", onIssue: ((String) -> Unit)? = null, onRep: () -> Unit) {
     val context = LocalContext.current
@@ -124,7 +112,7 @@ private class PushupCounter {
             PackageManager.PERMISSION_GRANTED)
     }
     var front by remember { mutableStateOf(true) }
-    var hint by remember { mutableStateOf("Tedd le a telefont oldalra, majd lépj a képbe.") }
+    var hint by remember { mutableStateOf("Helyezd a telefont oldalra úgy, hogy az egyik karod látszódjon.") }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         if (!it) hint = "A számláláshoz engedélyezned kell a kamerát."
@@ -160,7 +148,7 @@ private class PushupCounter {
         }
     }
     Text(hint, color = Color(0xFF7BE7C1))
-    Text("Oldalnézetből látszódjon a teljes tested. Mód: " + mode + ". Hangos visszajelzéssel.",
+    Text(if(mode=="pushups")"Elég a vállad, könyököd és csuklód. Lent 120°, fent 145°. Hangos visszajelzéssel." else "Oldalnézetből látszódjon a teljes tested. Mód: "+mode+". Hangos visszajelzéssel.",
         color = Color(0xFFA7B4CC))
     Text("A felismerés csak becslés: a fényviszonyok és a kamera szöge befolyásolhatják.",
         color = Color(0xFFA7B4CC))
