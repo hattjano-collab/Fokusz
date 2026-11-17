@@ -175,6 +175,35 @@ private val QLILAC = Color(0xFFB9AAFF)
                     color = QSOFT, fontSize = 12.sp)
             }
         }
+        QCard(listOf(Color(0xFF24263A),QBG)) {
+            Text("KÜLDETÉSEK – 3 ABLAK",color=QGREEN,fontWeight=FontWeight.Bold)
+            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                val tabs=listOf(
+                    Triple("chess","♟ Sakk",doneChess),
+                    Triple("push","💪 Fekvő",donePush),
+                    Triple("extra","✦ Extra",!doneChess||!donePush)
+                )
+                tabs.forEach { (key,label,done) ->
+                    OutlinedButton(
+                        modifier=Modifier.weight(1f),
+                        enabled=if(key=="extra") !done else !done && (active!="extra" && active!="custom")
+                            && p!=2 && (key!="chess" || ChessVerifier.isLinked(ctx)),
+                        onClick={
+                            if(key=="extra") {
+                                QuestStore.ensureQuest(ctx)
+                            } else QuestStore.switchStarter(ctx,key)
+                            cameraOn=false
+                            update()
+                        },
+                        colors=ButtonDefaults.outlinedButtonColors(
+                            contentColor=if(active==key)QGREEN else QWHITE)
+                    ) { Text(if(done && key!="extra")"✓ "+label else label,fontSize=10.sp) }
+                }
+            }
+            Text("A sakkpartikat és a kamerás fekvőket félbehagyhatod, és másik kezdő questre válthatsz. A korábbi haladás megmarad.",
+                color=QSOFT,fontSize=12.sp)
+        }
+
         QCard(listOf(Color(0xFF1D3F43), Color(0xFF17263C))) {
             Row {
                 Text("✦  MAI HALADÁS", color = QGREEN, fontWeight = FontWeight.Bold)
