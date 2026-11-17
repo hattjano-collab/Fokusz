@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.sp
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("AI-MOZGÁSEDZŐ", color = Color(0xFFF5F7FF), fontSize = 24.sp,
             fontWeight = FontWeight.Black)
-        Text("A kamera a teljes test helyzetét elemzi helyben. A felismerés nem tévedhetetlen.",
+        Text("Fekvőtámasznál elég az egyik kar: 120° lent, 145° fent. A többi gyakorlat megtartja a natív kamerát.",
             color = Color(0xFFA7B4CC), fontSize = 13.sp)
         modes.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -72,16 +72,20 @@ import androidx.compose.ui.unit.sp
             OutlinedButton(onClick = {running=false}, modifier = Modifier.fillMaxWidth()) {
                 Text("Kamera kikapcsolása")
             }
-            PushupCamera(-1000, mode = mode, onIssue = { reason ->
-                rejected++
-                lastReason=reason
-            }) {
+            val recognized:()->Unit={
                 val result=CoachRewards.recognized(ctx,mode)
                 count=result.count
                 if(result.count % CoachRewards.target(mode)==0) {
                     rewardNote=if(result.awarded>0) "✦ +"+duration(result.awarded)+" képernyőidő!"
-                        else "Elérted a beállított maximális időegyenleget."
+                        else "A jutalom most nem növelte a személyes egyenleget."
                 }
+            }
+            if(mode=="pushups") {
+                WebPushupCamera(questId=-1000,onRep=recognized)
+            }else {
+                PushupCamera(-1000,mode=mode,onIssue={reason->
+                    rejected++;lastReason=reason
+                },onRep=recognized)
             }
         }
         Text("Az AI-edző külön is jutalmaz; a napi questek jutalma ettől független.",
