@@ -208,7 +208,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                             cameraOn=false
                             when(key) {
                                 "extra" -> if(QuestStore.startersFinished(ctx)) {
-                                    if(active in listOf("chess","push") && p==2)
+                                    if(active in listOf("chess","push","custom") && p==2)
                                         QuestStore.next(ctx)
                                     else if(active.isEmpty())QuestStore.ensureQuest(ctx)
                                 }
@@ -280,7 +280,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                     color=QSOFT,fontSize=12.sp)
                 if(QuestStore.startersFinished(ctx)) {
                     QPrimary("✨ EXTRA QUESTEK MEGNYITÁSA") {
-                        if(QuestStore.active(ctx) in listOf("chess","push") &&
+                        if(QuestStore.active(ctx) in listOf("chess","push","custom") &&
                             QuestStore.phase(ctx)==2)QuestStore.next(ctx)
                         else if(QuestStore.active(ctx).isEmpty())QuestStore.ensureQuest(ctx)
                         selectedTab="extra";update()
