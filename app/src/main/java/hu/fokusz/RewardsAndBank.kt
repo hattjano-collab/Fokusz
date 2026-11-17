@@ -18,6 +18,7 @@ object TimeBank {
         val s=sp(c)
         val today=LocalDate.now()
         val old=s.getString("lastSettledDate","")
+        if(old==today.toString() && s.getString("depositDay","")==today.toString())return
         var last=try { LocalDate.parse(old) } catch(_:Exception) {
             val saved= s.getString("pendingDay","")
                 ?.takeIf{it.isNotBlank()} ?: s.getString("depositDay","")
