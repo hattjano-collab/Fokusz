@@ -277,8 +277,8 @@ private val C = Color(0xFF273750)
             Text("Az appok tényleges blokkolását a gyártói háttérkorlátozások befolyásolhatják.",
                 color = M, fontSize = 11.sp)
         }
-        FeatureCard("⌛ MAXIMÁLIS IDŐEGYENLEG") {
-            Text("Korlátozhatod, hogy összesen mennyi idő gyűlhessen fel. A jutalmak nem emelik a beállított plafon fölé az egyenleget.",
+        FeatureCard("⌛ NORMÁL JUTALMAK PLAFONJA") {
+            Text("A szokásos questjutalmak összegét korlátozhatod. A játékok nyereményére és az időbankból kivett percekre ez a 4–6 órás plafon már nem vonatkozik.",
                 color = M, fontSize = 12.sp)
             for (hours in listOf(1,2,3,4,6)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
