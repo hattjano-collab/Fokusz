@@ -97,6 +97,7 @@ object TeamNearby {
                     val profile=data.optJSONObject("profile")?:return
                     if(TeamStore.addMember(c,profile)) {
                         peers[endpointId]=profile.optString("id")
+                        connected=peers.isNotEmpty()
                         status="Csapat csatlakozott: "+profile.optString("name")
                         sendTo(endpointId,TeamStore.snapshot(c))
                         broadcast(c)
@@ -163,13 +164,18 @@ object TeamNearby {
             val c=app?:return
             if(!result.status.isSuccess) {
                 status="Nem sikerült a közeli kapcsolat. Újrapróbálkozom."
-                if(!TeamStore.host(c))discover(c)
+                if(!TeamStore.host(c)) {
+                    try{client?.stopDiscovery()}catch(_:Exception){}
+                    pendingDiscovery=false
+                    discover(c)
+                }
                 return
             }
             if(!TeamStore.host(c)) {
                 guestEndpoint=endpointId
                 connected=true
                 try {client?.stopDiscovery()}catch(_:Exception){}
+                pendingDiscovery=false
                 sendTo(endpointId,JSONObject().put("type","join")
                     .put("team",TeamStore.teamId(c))
                     .put("secret",TeamStore.secret(c))
@@ -183,6 +189,7 @@ object TeamNearby {
             if(endpointId==guestEndpoint) {
                 guestEndpoint=null;connected=false
                 status="A gazda nincs a közelben. A már lefoglalt percek megmaradnak."
+                pendingDiscovery=false
                 app?.let{discover(it)}
             } else {
                 connected=peers.isNotEmpty()
