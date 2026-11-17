@@ -231,15 +231,20 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun TimeHero(balance: Int, compact: Boolean = false) {
+    val animatedBalance by animateIntAsState(targetValue=balance,
+        animationSpec=tween(360),label="Élő időegyenleg")
+    val animatedProgress by animateFloatAsState(
+        targetValue=(balance.toFloat()/Store.DAILY).coerceIn(0f,1f),
+        animationSpec=tween(520),label="Időkeret")
     GlassCard(colors = listOf(Color(0xFF183D42), Color(0xFF152A3E))) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("◉  IDŐEGYENLEG", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             Spacer(Modifier.weight(1f))
             Text("● ÉLŐ", color = Mint.copy(alpha = .8f), fontSize = 11.sp)
         }
-        Text(clock(balance), color = White, fontWeight = FontWeight.ExtraBold, fontSize = if (compact) 38.sp else 56.sp)
+        Text(clock(animatedBalance), color = White, fontWeight = FontWeight.ExtraBold, fontSize = if (compact) 38.sp else 56.sp)
         Text("Ennyi időd van még a kiválasztott appokra", color = Muted, fontSize = 13.sp)
-        val progress = (balance.toFloat() / Store.DAILY).coerceIn(0f, 1f)
+        val progress = animatedProgress
         LinearProgressIndicator(
             progress = { progress },
             modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
@@ -519,6 +524,35 @@ class MainActivity : ComponentActivity() {
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
                 "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
+        }
+
+        if(tab == 0 || tab == 1 || tab == 3) {
+            Row(
+                Modifier.fillMaxWidth().animateContentSize().clip(RoundedCornerShape(17.dp))
+                    .background(Brush.horizontalGradient(
+                        listOf(Color(0xFF203E47),Color(0xFF262C46))))
+                    .border(1.dp,Color(0xFF395B65),RoundedCornerShape(17.dp))
+                    .padding(horizontal=13.dp,vertical=11.dp),
+                verticalAlignment=Alignment.CenterVertically,
+                horizontalArrangement=Arrangement.spacedBy(8.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("🏦  BANK HOLNAP",color=Muted,fontSize=10.sp,
+                        fontWeight=FontWeight.Bold)
+                    Text(duration(TimeBank.projectedTomorrow(ctx)),color=Mint,
+                        fontSize=18.sp,fontWeight=FontWeight.Black)
+                }
+                if(DuolingoStore.linked(ctx) && DuolingoStore.rewardedToday(ctx)) {
+                    Text("🔥 DUO ✓",color=Mint,fontSize=13.sp,fontWeight=FontWeight.Bold)
+                } else {
+                    OutlinedButton(onClick={tab=8},
+                        colors=ButtonDefaults.outlinedButtonColors(contentColor=Gold),
+                        border=BorderStroke(1.dp,Color(0xFF6F6753)),
+                        shape=RoundedCornerShape(12.dp)) {
+                        Text("🔥 DUO +3",fontSize=12.sp)
+                    }
+                }
+            }
         }
 
         if (tab == 0) {
