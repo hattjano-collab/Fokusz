@@ -13,7 +13,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class FocusEvent(val id: Long, val title: String, val time: LocalDateTime, val minutes: Int, val source: String)
+data class FocusEvent(val id: Long, val title: String, val time: LocalDateTime, val minutes: Int, val source: String, val weekly:Boolean=false)
 
 object CalendarStore {
     private fun sp(c: Context) = c.getSharedPreferences("fokusz_calendar_v1",0)
@@ -26,17 +26,18 @@ object CalendarStore {
                 val o = arr.optJSONObject(i) ?: continue
                 val dt = try { LocalDateTime.parse(o.getString("time")) } catch (_: Exception) {continue}
                 output.add(FocusEvent(o.optLong("id"),o.optString("title"),dt,
-                    o.optInt("minutes",30).coerceIn(5,600),"Fókusz"))
+                    o.optInt("minutes",30).coerceIn(5,600),"Fókusz",o.optBoolean("weekly",false)))
             }
         } catch (_: Exception) {}
         return output
     }
-    @Synchronized fun add(c: Context,title:String,whenAt:LocalDateTime,minutes:Int):Boolean {
+    @Synchronized fun add(c: Context,title:String,whenAt:LocalDateTime,minutes:Int,weekly:Boolean=false):Boolean {
         val name=title.trim()
         if(name.length !in 3..90 || minutes !in 5..600) return false
         val arr=try { JSONArray(raw(c)) } catch (_:Exception) {JSONArray()}
         val obj=JSONObject().put("id",System.currentTimeMillis())
             .put("title",name).put("time",whenAt.toString()).put("minutes",minutes)
+            .put("weekly",weekly)
         arr.put(obj)
         sp(c).edit().putString("events",arr.toString()).commit()
         return true
@@ -45,7 +46,8 @@ object CalendarStore {
         val arr=JSONArray()
         for(e in localEvents(c).filter { it.id!=id }) {
             arr.put(JSONObject().put("id",e.id).put("title",e.title)
-                .put("time",e.time.toString()).put("minutes",e.minutes))
+                .put("time",e.time.toString()).put("minutes",e.minutes)
+                .put("weekly",e.weekly))
         }
         sp(c).edit().putString("events",arr.toString()).apply()
     }
@@ -80,10 +82,30 @@ object CalendarStore {
         } catch (_:SecurityException) {} catch (_:Exception) {}
         return out
     }
-    fun events(c:Context,start:LocalDate,end:LocalDate): List<FocusEvent> =
-        (localEvents(c).filter { !it.time.toLocalDate().isBefore(start) &&
-            !it.time.toLocalDate().isAfter(end) } +
-            deviceEvents(c,start,end)).sortedBy { it.time }
+    fun events(c:Context,start:LocalDate,end:LocalDate): List<FocusEvent> {
+        val local=localEvents(c).flatMap { event ->
+            val first=event.time.toLocalDate()
+            if(!event.weekly) {
+                if(!first.isBefore(start) && !first.isAfter(end)) listOf(event)
+                else emptyList()
+            } else {
+                if(first.isAfter(end)) emptyList()
+                else {
+                    val from=if(first.isAfter(start))first else start
+                    val delta=java.time.temporal.ChronoUnit.DAYS.between(first,from)
+                    val offset=if(delta%7L==0L)0L else 7L-delta%7L
+                    var day=from.plusDays(offset)
+                    val entries=mutableListOf<FocusEvent>()
+                    while(!day.isAfter(end) && entries.size<60){
+                        entries.add(event.copy(time=day.atTime(event.time.toLocalTime())))
+                        day=day.plusDays(7)
+                    }
+                    entries
+                }
+            }
+        }
+        return (local+deviceEvents(c,start,end)).sortedBy{it.time}
+    }
 
     fun upcoming(c:Context):List<FocusEvent> {
         val now=LocalDateTime.now()
