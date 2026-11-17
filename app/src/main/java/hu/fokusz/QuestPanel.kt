@@ -4,6 +4,9 @@ import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
@@ -57,7 +61,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
+        Modifier.fillMaxWidth().animateContentSize().clip(RoundedCornerShape(24.dp))
             .background(Brush.linearGradient(tones))
             .border(1.dp, QEDGE, RoundedCornerShape(24.dp))
             .padding(18.dp),
@@ -117,6 +121,9 @@ private val QLILAC = Color(0xFFB9AAFF)
 ) {
     val ctx = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable {
+        mutableStateOf(QuestStore.active(ctx).let { if(it=="push" || it=="extra")it else "chess" })
+    }
     var cameraOn by remember { mutableStateOf(false) }
     var customEditing by remember { mutableStateOf(false) }
     var customTitle by remember { mutableStateOf("") }
@@ -177,33 +184,54 @@ private val QLILAC = Color(0xFFB9AAFF)
                     color = QSOFT, fontSize = 12.sp)
             }
         }
-        QCard(listOf(Color(0xFF24263A),QBG)) {
-            Text("KÜLDETÉSEK – 3 ABLAK",color=QGREEN,fontWeight=FontWeight.Bold)
-            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+        QCard(listOf(Color(0xFF252B49),QBG)) {
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text("VÁLASSZ QUESTET",color=QGREEN,fontWeight=FontWeight.ExtraBold)
+                Spacer(Modifier.weight(1f))
+                Text("3 külön ablak",color=QSOFT,fontSize=11.sp)
+            }
+            Row(horizontalArrangement=Arrangement.spacedBy(7.dp)) {
                 val tabs=listOf(
-                    Triple("chess",starter0.icon+" "+starter0.title.take(13),doneChess),
-                    Triple("push",starter1.icon+" "+starter1.title.take(13),donePush),
-                    Triple("extra","✦ Extra",!doneChess||!donePush)
+                    Triple("chess",starter0.icon+"\n"+starter0.title.take(12),doneChess),
+                    Triple("push",starter1.icon+"\n"+starter1.title.take(12),donePush),
+                    Triple("extra","✨\nEXTRA",!doneChess||!donePush)
                 )
                 tabs.forEach { (key,label,done) ->
+                    val chosen=selectedTab==key
+                    val ink by animateColorAsState(
+                        targetValue=if(chosen)QGREEN else QWHITE,
+                        label="Quest fül kiemelése"
+                    )
                     OutlinedButton(
-                        modifier=Modifier.weight(1f),
-                        enabled=if(key=="extra") !done else !done && (active!="extra" && active!="custom")
-                            && p!=2 && (key=="extra" || QuestStore.starter(ctx,key).kind!=QuestKind.CHESS
-                                || ChessVerifier.isLinked(ctx)),
                         onClick={
-                            if(key=="extra") {
-                                QuestStore.ensureQuest(ctx)
-                            } else QuestStore.switchStarter(ctx,key)
+                            selectedTab=key
                             cameraOn=false
+                            when(key) {
+                                "extra" -> if(QuestStore.startersFinished(ctx)) {
+                                    if(active in listOf("chess","push") && p==2)
+                                        QuestStore.next(ctx)
+                                    else if(active.isEmpty())QuestStore.ensureQuest(ctx)
+                                }
+                                "chess","push" -> if(!QuestStore.starterDone(ctx,key))
+                                    QuestStore.switchStarter(ctx,key)
+                            }
                             update()
                         },
+                        modifier=Modifier.weight(1f).height(70.dp),
+                        shape=RoundedCornerShape(17.dp),
+                        border=BorderStroke(if(chosen)2.dp else 1.dp,
+                            if(chosen)QGREEN else QEDGE),
                         colors=ButtonDefaults.outlinedButtonColors(
-                            contentColor=if(active==key)QGREEN else QWHITE)
-                    ) { Text(if(done && key!="extra")"✓ "+label else label,fontSize=10.sp) }
+                            containerColor=if(chosen)Color(0xFF253F43) else Color(0xFF202C44),
+                            contentColor=ink)
+                    ) {
+                        Text((if(done && key!="extra")"✓ " else if(done)"🔒 " else "")+label,
+                            fontSize=11.sp,fontWeight=if(chosen)FontWeight.Bold else FontWeight.Normal,
+                            textAlign=TextAlign.Center,maxLines=3)
+                    }
                 }
             }
-            Text("A két kiválasztott kezdő quest között válthatsz, a haladás és az időzítő állapota megmarad. Az Extra csak utána nyílik meg.",
+            Text("Bármelyik fülre rányomhatsz. A két alapquest haladása megmarad, az Extra a teljesítésük után nyílik meg.",
                 color=QSOFT,fontSize=12.sp)
         }
 
@@ -229,7 +257,70 @@ private val QLILAC = Color(0xFFB9AAFF)
             )
         }
 
-        if (quest == null) {
+        if (selectedTab=="extra" && !QuestStore.startersFinished(ctx)) {
+            QCard(listOf(Color(0xFF292B45),QBG)) {
+                Text("🔒 EXTRA QUESTEK",fontSize=23.sp,color=QWHITE,
+                    fontWeight=FontWeight.Bold)
+                Text("Az extra questek a két választott kezdőfeladat után nyílnak. Válassz fent az 1. vagy 2. fülre, és haladj a saját tempódban.",
+                    color=QSOFT)
+                Text("Kész alapquestek: " + listOf(doneChess,donePush).count{it} + " / 2",
+                    color=QGREEN,fontWeight=FontWeight.Bold)
+                QSecondary("1. ALAPQUEST") {selectedTab="chess";update()}
+                QSecondary("2. ALAPQUEST") {selectedTab="push";update()}
+            }
+        } else if ((selectedTab=="chess" && doneChess) ||
+                    (selectedTab=="push" && donePush)) {
+            val selectedQuest=if(selectedTab=="chess")starter0 else starter1
+            QCard(listOf(Color(0xFF1B4142),QBG)) {
+                Text("✓ ALAPQUEST TELJESÍTVE",color=QGREEN,
+                    fontWeight=FontWeight.ExtraBold,fontSize=18.sp)
+                Text(selectedQuest.icon+" "+selectedQuest.title,color=QWHITE,
+                    fontSize=21.sp,fontWeight=FontWeight.Bold)
+                Text("A jutalom már jóváírva vagy a questet kihagytad. Ettől még bármikor visszanézheted ezt a fület.",
+                    color=QSOFT,fontSize=12.sp)
+                if(QuestStore.startersFinished(ctx)) {
+                    QPrimary("✨ EXTRA QUESTEK MEGNYITÁSA") {
+                        if(QuestStore.active(ctx) in listOf("chess","push") &&
+                            QuestStore.phase(ctx)==2)QuestStore.next(ctx)
+                        else if(QuestStore.active(ctx).isEmpty())QuestStore.ensureQuest(ctx)
+                        selectedTab="extra";update()
+                    }
+                } else {
+                    QPrimary("MÁSODIK ALAPQUEST FOLYTATÁSA") {
+                        val target=if(selectedTab=="chess")"push" else "chess"
+                        selectedTab=target
+                        QuestStore.switchStarter(ctx,target)
+                        update()
+                    }
+                }
+            }
+        } else if(selectedTab!=active && active=="custom") {
+            QCard {
+                Text("✦ EGYÉNI QUEST FOLYAMATBAN",color=QWHITE,
+                    fontWeight=FontWeight.Bold)
+                Text("A napi saját feladatodat be kell fejezned, mielőtt másik questet indítasz. A fenti fülek közben szabadon megtekinthetők.",
+                    color=QSOFT)
+                QPrimary("AKTUÁLIS QUEST MEGJELENÍTÉSE") {
+                    selectedTab=if(QuestStore.starterDone(ctx,"chess"))"push" else "chess"
+                    update()
+                }
+            }
+        } else if(selectedTab!=active && quest!=null &&
+                    selectedTab in listOf("chess","push")) {
+            val item=QuestStore.starter(ctx,selectedTab)
+            QCard {
+                Text(item.icon+" "+item.title,color=QWHITE,fontSize=21.sp,
+                    fontWeight=FontWeight.Bold)
+                Text("Ezt a feladatot itt külön elindíthatod vagy folytathatod.",
+                    color=QSOFT)
+                if(item.kind==QuestKind.CHESS && !ChessVerifier.isLinked(ctx)) {
+                    QPrimary("SAKKFIÓK BEÁLLÍTÁSA") {openSettingsTab()}
+                } else QPrimary("FELADAT MEGNYITÁSA") {
+                    QuestStore.switchStarter(ctx,selectedTab)
+                    update()
+                }
+            }
+        } else if (quest == null) {
             QCard {
                 Text("MELYIKKEL KEZDESZ?", color = QLILAC,
                     fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
@@ -484,8 +575,10 @@ private val QLILAC = Color(0xFFB9AAFF)
                     java.time.format.DateTimeFormatter.ofPattern("MM. dd.", Locale("hu"))),
                     color = QSOFT)
             }
-            Text("♟  1 sakkmeccs: +5 perc", color = QWHITE)
-            Text("💪  10 vagy 20 fekvőtámasz: +10 perc", color = QWHITE)
+            Text(starter0.icon+"  "+starter0.title+": +"+duration(starter0.reward),
+                color=QWHITE)
+            Text(starter1.icon+"  "+starter1.title+": +"+duration(starter1.reward),
+                color=QWHITE)
             Text("↪  3 kihagyás naponta: –5 perc / alkalom", color = QWHITE)
             Text("✦  1 egyéni csere naponta: 15 perc → +10 perc", color = QWHITE)
             Text("A napi lehetőségek éjfélkor megújulnak. Az extra questek a két kezdő feladat után véletlenszerűen következnek.",
