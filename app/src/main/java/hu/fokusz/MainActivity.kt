@@ -279,7 +279,7 @@ class MainActivity : ComponentActivity() {
 @Composable fun FokuszApp(openTab:Int = -1) {
     val ctx = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(openTab) { if(openTab in 0..8) tab=openTab }
+    LaunchedEffect(openTab) { if(openTab in 0..9) tab=openTab }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
@@ -479,7 +479,8 @@ class MainActivity : ComponentActivity() {
                         Triple(5,"◉","Fókuszmód"),
                         Triple(6,"⚙","Beállítások"),
                         Triple(7,"▦","Naptár"),
-                        Triple(8,"🔥","Duolingo")
+                        Triple(8,"🔥","Duolingo"),
+                        Triple(9,"👥","Csapatok")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -522,7 +523,7 @@ class MainActivity : ComponentActivity() {
                 Text("☰  MENÜ",fontWeight=FontWeight.Bold)
             }
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
-                "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo").getOrElse(tab) { "Fókusz" },
+                "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo","Csapatok").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
@@ -791,8 +792,11 @@ class MainActivity : ComponentActivity() {
         } else if(tab == 8) {
             DuolingoPanel()
         }
+        else if(tab==9) {
+            TeamPanel()
+        }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.4", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.5", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
