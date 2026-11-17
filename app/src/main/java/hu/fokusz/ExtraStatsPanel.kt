@@ -15,10 +15,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
@@ -38,6 +40,8 @@ private val SUB=Color(0xFFA7B4CC)
 @Composable fun ExtraStatsPanel() {
     val c=LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
+    var bankMinutes by remember {mutableStateOf("")}
+    var bankNotice by remember {mutableStateOf("")}
     LaunchedEffect(Unit) { while (true) { delay(4000); refresh++ } }
     val bank=remember(refresh) { TimeBank.ready(c) }
     val pending=remember(refresh) { TimeBank.waiting(c) }
@@ -50,7 +54,7 @@ private val SUB=Color(0xFFA7B4CC)
     val estimate=(7*Store.DAILY-used).coerceAtLeast(0)
     Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
         FeatureBox("🏦 IDŐBANK  •  NAPI +10%") {
-            Text("A bankban tárolt virtuális idő naponta egyszer 10%-kal nő, legfeljebb 120 percig. A ma betett perceket holnaptól használhatod.",
+            Text("A bankban tárolt virtuális idő minden nap 10%-kal nő. Nincs 120 perces vagy napi befizetési korlát. A ma betett időt holnaptól használhatod.",
                 color=SUB,fontSize=12.sp)
             Column(Modifier.fillMaxWidth().animateContentSize()
                 .background(Color(0xFF1B3B42),RoundedCornerShape(16.dp))
@@ -74,19 +78,40 @@ private val SUB=Color(0xFFA7B4CC)
             }
             if(todayBonus>0) Text("✓ A mai napi kamat: +" + duration(todayBonus),
                 color=GREEN,fontSize=13.sp)
-            Text("Mai befizetési keret: " + duration(TimeBank.remainingDaily(c)) + " / 30 perc",
+            Text("Bármennyi saját virtuális percet félretehetsz, amennyi az egyenlegeden van.",
                 color=SUB,fontSize=12.sp)
-            for(v in listOf(300,900)) {
-                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick={if(TimeBank.deposit(c,v))refresh++},
-                        enabled=Store.bal(c)>=v && TimeBank.remainingDaily(c)>=v
-                            && bank+pending+v<=TimeBank.MAX_TOTAL,
-                        modifier=Modifier.weight(1f)) { Text("Beteszek " + v/60 + " p") }
-                    OutlinedButton(onClick={if(TimeBank.withdraw(c,v))refresh++},
-                        enabled=bank>=v && Store.bal(c)+v<=FocusPrefs.maxBalance(c),
-                        modifier=Modifier.weight(1f)) { Text("Kiveszek " + v/60 + " p") }
-                }
+            OutlinedTextField(
+                value=bankMinutes,
+                onValueChange={v->if(v.length<=9&&v.all(Char::isDigit))bankMinutes=v},
+                label={Text("Összeg percben (nincs napi korlát)")},
+                modifier=Modifier.fillMaxWidth(),singleLine=true)
+            val customAmount=bankMinutes.toLongOrNull()?.let {
+                (it*60L).takeIf{value->value in 1..Store.MAX_SAFE_SECONDS.toLong()}
+                    ?.toInt()
+            }?:0
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                Button(onClick={
+                    bankNotice=if(TimeBank.deposit(c,customAmount))
+                        "✓ Befizetve. Holnap kivehető." else "Nincs elég saját idő."
+                    refresh++
+                },enabled=customAmount>0&&customAmount<=Store.bal(c),
+                    modifier=Modifier.weight(1f)){Text("BETESZEM")}
+                OutlinedButton(onClick={
+                    bankNotice=if(TimeBank.withdraw(c,customAmount))
+                        "✓ Kivéve a személyes egyenlegedre."else"Nincs ennyi elérhető banki idő."
+                    refresh++
+                },enabled=customAmount>0&&customAmount<=bank,
+                    modifier=Modifier.weight(1f)){Text("KIVESZEM")}
             }
+            OutlinedButton(onClick={
+                val all=Store.bal(c)
+                bankNotice=if(TimeBank.deposit(c,all))"✓ Teljes egyenleg félretéve."
+                    else"Nem sikerült a befizetés."
+                refresh++
+            },enabled=Store.bal(c)>0,modifier=Modifier.fillMaxWidth()){
+                Text("TELJES SAJÁT EGYENLEG BETÉTELE")
+            }
+            if(bankNotice.isNotBlank())Text(bankNotice,color=GREEN,fontSize=12.sp)
             Text("Az összeg a befizetés után rögtön frissül. Az éjfél utáni napi növekedést az app megnyitásakor és nyitott képernyőn is elszámolja. Kerekítés egész másodpercre.",
                 color=SUB,fontSize=11.sp)
         }
