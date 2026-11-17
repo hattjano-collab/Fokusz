@@ -22,6 +22,24 @@ object FocusPrefs {
         "Pinterest" to "com.pinterest",
         "BeReal" to "com.bereal.ft"
     )
+    // A fókuszmód engedélyezett appjai: Google kereső, ChatGPT, az alkalmazás
+    // és az alapvető telefonos/biztonsági szolgáltatások.
+    private val focusAllowed = setOf(
+        "com.google.android.googlequicksearchbox", "com.openai.chatgpt",
+        "com.android.settings", "com.android.systemui",
+        "com.google.android.gms", "com.android.phone", "com.google.android.dialer",
+        "com.android.dialer", "com.google.android.contacts",
+        "com.google.android.apps.messaging", "com.android.mms",
+        "com.google.android.deskclock", "com.android.deskclock",
+        "com.miui.home", "com.android.launcher3", "com.google.android.apps.nexuslauncher",
+        "com.miui.securitycenter", "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller", "com.android.packageinstaller",
+        "com.google.android.packageinstaller", "com.google.android.inputmethod.latin",
+        "com.android.inputmethod.latin", "com.miui.guardprovider"
+    )
+    fun allowedDuringFocus(c:Context, pkg:String):Boolean =
+        pkg.isBlank() || pkg==c.packageName || pkg in focusAllowed
+
     private val standard = Store.BLOCKED + setOf("com.ss.android.ugc.trill")
     fun blocked(c: Context, pkg: String): Boolean {
         val p = sp(c)
@@ -47,7 +65,7 @@ object FocusPrefs {
     @Synchronized fun activateEmergency(c: Context): Boolean {
         if (!emergencyAvailable(c)) return false
         // Ne lehessen az egyéni quest teljes lezárását feloldani.
-        if (QuestStore.isCustomTimerLocked(c)) return false
+        if (QuestStore.isCustomTimerLocked(c) || focusLocked(c)) return false
         sp(c).edit().putString("emergency_date", today())
             .putLong("emergency_until", SystemClock.elapsedRealtime() + 180000L).commit()
         return true
@@ -55,7 +73,7 @@ object FocusPrefs {
     fun emergencyActive(c: Context): Boolean =
         sp(c).getString("emergency_date", "") == today() &&
             SystemClock.elapsedRealtime() < sp(c).getLong("emergency_until", 0L) &&
-            !QuestStore.isCustomTimerLocked(c)
+            !QuestStore.isCustomTimerLocked(c) && !focusLocked(c)
     fun emergencyLeft(c: Context): Int {
         if (!emergencyActive(c)) return 0
         return ((sp(c).getLong("emergency_until", 0L) - SystemClock.elapsedRealtime()) / 1000L).toInt().coerceAtLeast(0)
