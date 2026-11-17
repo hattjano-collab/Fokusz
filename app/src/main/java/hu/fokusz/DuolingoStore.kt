@@ -87,7 +87,8 @@ object DuolingoStore {
             val saved=sp(c)
             saved.edit().putString("username",user).putLong("userId",id).commit()
             scheduleReminders(c)
-            check(c)
+            DuoCheck(true,false,streak(c),0,
+                "A Duolingo-profil mentve. A napi XP ellenőrzése automatikusan elindul.")
         } catch(e:Exception) {
             DuoCheck(false,false,0,0,
                 "A Duolingo-fiókot nem sikerült összekötni: "+
