@@ -111,8 +111,8 @@ import java.security.SecureRandom
                 x<y -> -stake
                 else -> 0
             }
-            if(x>y) Store.add(context,stake*2)
-            else if(x==y)Store.add(context,stake)
+            if(x>y) Store.addUncapped(context,stake.toLong()*2L)
+            else if(x==y)Store.addUncapped(context,stake.toLong())
             // A tényleges eredményt a dobás végén mutatjuk meg.
             result="::$net"
             GambleStats.record(context,"Kockapárbaj",net)
