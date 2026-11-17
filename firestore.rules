@@ -1,0 +1,201 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isMember() {
+      return signedIn() && request.auth.uid in resource.data.members;
+    }
+    function teamPath(id) {
+      return /databases/$(database)/documents/teams/$(id);
+    }
+    function eventPath(team, eventId) {
+      return /databases/$(database)/documents/teams/$(team)/events/$(eventId);
+    }
+    function mainKeys() {
+      return ['ownerUid','name','inviteKey','joinProof','createdAt','lastDay',
+        'members','pool','bank','lastRewardEvent','bossPush','bossChess',
+        'bossStudy','bossTargetPush','bossTargetChess','bossTargetStudy',
+        'bossClaimedAt'];
+    }
+    function validProfile(p) {
+      return p.keys().hasAll(['name','share','personalLeft','used','push',
+        'chess','study','updatedAt'])
+        && p.keys().hasOnly(['name','share','personalLeft','used','push',
+        'chess','study','updatedAt'])
+        && p.name is string && p.name.size() >= 2 && p.name.size() <= 24
+        && p.share is bool
+        && p.personalLeft is int && p.personalLeft >= -1
+        && p.personalLeft <= 21600
+        && p.used is int && p.used >= -1 && p.used <= 86400
+        && (!p.share ? (p.personalLeft == -1 && p.used == -1) : true)
+        && p.push is int && p.push >= 0
+        && p.chess is int && p.chess >= 0
+        && p.study is int && p.study >= 0
+        && p.updatedAt == request.time;
+    }
+    function validJoin() {
+      let uid = request.auth.uid;
+      return signedIn()
+        && !(uid in resource.data.members)
+        && resource.data.members.keys().size() < 20
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['members','pool','joinProof','bossTargetPush',
+               'bossTargetChess','bossTargetStudy'])
+        && request.resource.data.members.diff(resource.data.members)
+             .affectedKeys().hasOnly([uid])
+        && request.resource.data.members.keys().size() ==
+             resource.data.members.keys().size() + 1
+        && validProfile(request.resource.data.members[uid])
+        && request.resource.data.joinProof == resource.data.inviteKey + ':' + uid
+        && request.resource.data.joinProof != resource.data.joinProof
+        && request.resource.data.pool == resource.data.pool + 600
+        && request.resource.data.pool <= 86400
+        && request.resource.data.bossTargetPush == resource.data.bossTargetPush + 100
+        && request.resource.data.bossTargetChess == resource.data.bossTargetChess + 10
+        && request.resource.data.bossTargetStudy == resource.data.bossTargetStudy + 10800;
+    }
+    function validProfileUpdate() {
+      let uid = request.auth.uid;
+      let before = resource.data.members[uid];
+      let after = request.resource.data.members[uid];
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['members','bossPush','bossChess','bossStudy'])
+        && request.resource.data.members.diff(resource.data.members)
+             .affectedKeys().hasOnly([uid])
+        && validProfile(after)
+        && after.push >= before.push && after.push <= before.push + 1000
+        && after.chess >= before.chess && after.chess <= before.chess + 100
+        && after.study >= before.study && after.study <= before.study + 86400
+        && request.resource.data.bossPush ==
+             resource.data.bossPush + after.push - before.push
+        && request.resource.data.bossChess ==
+             resource.data.bossChess + after.chess - before.chess
+        && request.resource.data.bossStudy ==
+             resource.data.bossStudy + after.study - before.study;
+    }
+    function validSpend() {
+      let oldTotal = resource.data.pool + resource.data.bank;
+      let newTotal = request.resource.data.pool + request.resource.data.bank;
+      let spent = oldTotal - newTotal;
+      return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['pool','bank'])
+        && spent >= 1 && spent <= 60
+        && request.resource.data.pool >= 0
+        && request.resource.data.bank >= 0
+        && request.resource.data.pool ==
+           (resource.data.pool >= spent ? resource.data.pool - spent : 0)
+        && request.resource.data.bank ==
+           resource.data.bank - (spent - (resource.data.pool -
+                                           request.resource.data.pool));
+    }
+    function validDailySettlement() {
+      let total = resource.data.bank + resource.data.pool;
+      let nextBank = total + int(total / 10);
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['lastDay','pool','bank'])
+        && request.resource.data.lastDay ==
+             resource.data.lastDay + duration.value(1,'d')
+        && request.resource.data.lastDay <= request.time.date()
+        && request.resource.data.pool ==
+             resource.data.members.keys().size() * 600
+        && request.resource.data.bank ==
+             (nextBank > 86400 ? 86400 : nextBank);
+    }
+    function validQuestReward(team) {
+      let eventId = request.resource.data.lastRewardEvent;
+      return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['pool','lastRewardEvent'])
+        && eventId is string && eventId.size() >= 20 && eventId.size() <= 160
+        && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
+        && eventId != resource.data.lastRewardEvent
+        && !exists(eventPath(team,eventId))
+        && existsAfter(eventPath(team,eventId))
+        && getAfter(eventPath(team,eventId)).data.uid == request.auth.uid
+        && getAfter(eventPath(team,eventId)).data.amount == 300
+        && request.resource.data.pool == resource.data.pool + 300
+        && request.resource.data.pool <= 86400;
+    }
+    function validBossReward() {
+      let n = resource.data.members.keys().size();
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pool','bossClaimedAt','bossTargetPush',
+               'bossTargetChess','bossTargetStudy'])
+        && resource.data.bossPush >= resource.data.bossTargetPush
+        && resource.data.bossChess >= resource.data.bossTargetChess
+        && resource.data.bossStudy >= resource.data.bossTargetStudy
+        && resource.data.bossClaimedAt + duration.value(7,'d') <= request.time
+        && request.resource.data.bossClaimedAt == request.time
+        && request.resource.data.pool == resource.data.pool + n * 900
+        && request.resource.data.pool <= 86400
+        && request.resource.data.bossTargetPush == resource.data.bossPush + n * 100
+        && request.resource.data.bossTargetChess == resource.data.bossChess + n * 10
+        && request.resource.data.bossTargetStudy == resource.data.bossStudy + n * 10800;
+    }
+    function validMemberRemoval() {
+      let uid = request.auth.uid;
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['members','bossTargetPush','bossTargetChess','bossTargetStudy'])
+        && request.resource.data.members.keys().size() ==
+             resource.data.members.keys().size() - 1
+        && resource.data.ownerUid in request.resource.data.members
+        && (uid == resource.data.ownerUid ||
+             !(uid in request.resource.data.members))
+        && request.resource.data.bossTargetPush == resource.data.bossTargetPush - 100
+        && request.resource.data.bossTargetChess == resource.data.bossTargetChess - 10
+        && request.resource.data.bossTargetStudy == resource.data.bossTargetStudy - 10800;
+    }
+    match /teams/{teamId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(mainKeys())
+        && request.resource.data.keys().hasOnly(mainKeys())
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 3
+        && request.resource.data.name.size() <= 40
+        && request.resource.data.inviteKey is string
+        && request.resource.data.inviteKey.size() >= 30
+        && request.resource.data.inviteKey.size() <= 100
+        && request.resource.data.joinProof == ''
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lastDay == request.time.date()
+        && request.resource.data.members.keys() == [request.auth.uid]
+        && validProfile(request.resource.data.members[request.auth.uid])
+        && request.resource.data.pool == 600
+        && request.resource.data.bank == 0
+        && request.resource.data.lastRewardEvent == ''
+        && request.resource.data.bossPush == 0
+        && request.resource.data.bossChess == 0
+        && request.resource.data.bossStudy == 0
+        && request.resource.data.bossTargetPush == 100
+        && request.resource.data.bossTargetChess == 10
+        && request.resource.data.bossTargetStudy == 10800
+        && request.resource.data.bossClaimedAt ==
+             timestamp.date(1970,1,1);
+      allow get: if isMember();
+      allow list: if false;
+      allow update: if validJoin() ||
+        (isMember() &&
+          (validProfileUpdate() || validSpend() || validDailySettlement()
+            || validQuestReward(teamId) || validBossReward()
+            || validMemberRemoval()));
+      allow delete: if isMember() &&
+        resource.data.ownerUid == request.auth.uid;
+
+      match /events/{eventId} {
+        allow read: if signedIn() &&
+          request.auth.uid in get(teamPath(teamId)).data.members;
+        allow create: if signedIn()
+          && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
+          && !exists(eventPath(teamId,eventId))
+          && request.resource.data.keys().hasOnly(['uid','amount','createdAt'])
+          && request.resource.data.keys().hasAll(['uid','amount','createdAt'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.amount == 300
+          && request.resource.data.createdAt == request.time
+          && request.auth.uid in get(teamPath(teamId)).data.members
+          && getAfter(teamPath(teamId)).data.lastRewardEvent == eventId;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
