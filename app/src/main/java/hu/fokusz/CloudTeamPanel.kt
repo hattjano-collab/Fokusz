@@ -72,6 +72,7 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
     var nickname by remember {mutableStateOf(CloudTeams.nickname(ctx).takeIf{it!="Tag"}?:"")}
     var share by remember {mutableStateOf(CloudTeams.sharing(ctx))}
     var paste by remember {mutableStateOf("")}
+    var giftMinutes by remember {mutableStateOf("")}
     var message by remember {mutableStateOf("")}
     var busy by remember {mutableStateOf(false)}
     var confirm by remember {mutableStateOf(false)}
@@ -168,14 +169,57 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
                     color=CM,fontSize=12.sp)
                 Text("Ha elfogy a személyes idő, automatikusan a közös keret fogy, majd a bank.",
                     color=CW,fontSize=12.sp)
-                Text("Bankkal együtt: "+duration(state.pool+state.bank),color=CG)
+                Text("Bankkal együtt: "+duration((state.pool.toLong()+state.bank).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt()),color=CG)
                 Text("Már lefoglalt közös időd: "+duration(CloudTeams.leased(ctx)),
                     color=CM,fontSize=12.sp)
             }
             CloudBox("🏦 CSAPATBANK · NAPI +10%"){
                 Text(duration(state.bank),color=CP,fontSize=27.sp,fontWeight=FontWeight.Black)
-                Text("A tegnapról megmaradt idő a bankba kerül. A bank minden új napon 10%-kal nő (maximum 24 óra).",
+                Text("A tegnapról megmaradt idő a bankba kerül. A bank minden új napon 10%-kal nő. Nincs 24 órás vagy napi banki korlát.",
                     color=CM,fontSize=12.sp)
+            }
+            CloudBox("🎁 EXTRA IDŐ A CSAPATNAK"){
+                Text("A saját virtuális képernyőidődből bármennyit felajánlhatsz a csapatnak, vagy közvetlenül a bankjába teheted.",
+                    color=CM,fontSize=12.sp)
+                Text("Saját egyenleged: "+duration(Store.bal(ctx)),
+                    color=CP,fontSize=14.sp,fontWeight=FontWeight.Bold)
+                OutlinedTextField(value=giftMinutes,
+                    onValueChange={v->if(v.length<=9&&v.all(Char::isDigit))giftMinutes=v},
+                    modifier=Modifier.fillMaxWidth(),singleLine=true,
+                    label={Text("Felajánlott idő (perc)")})
+                val gift=giftMinutes.toLongOrNull()?.let{minutes->
+                    (minutes*60L).takeIf{value->
+                        value in 1L..Store.MAX_SAFE_SECONDS.toLong()
+                    }?.toInt()
+                }?:0
+                val waiting=CloudTeams.pendingContribution(ctx)
+                if(waiting)Text("⏳ Internetes jóváírás folyamatban. A befizetés nem vész el, újraküldjük.",
+                    color=CG,fontSize=12.sp)
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                    Button(onClick={busy=true;scope.launch{
+                        message=CloudTeams.contribute(ctx,gift,false)
+                        busy=false;tick++
+                    }},enabled=gift>0&&gift<=Store.bal(ctx)&&!waiting&&!busy,
+                        modifier=Modifier.weight(1f)){
+                        Text("KÖZÖS KERETBE",fontSize=11.sp)
+                    }
+                    OutlinedButton(onClick={busy=true;scope.launch{
+                        message=CloudTeams.contribute(ctx,gift,true)
+                        busy=false;tick++
+                    }},enabled=gift>0&&gift<=Store.bal(ctx)&&!waiting&&!busy,
+                        modifier=Modifier.weight(1f)){
+                        Text("CSAPATBANKBA",fontSize=11.sp)
+                    }
+                }
+                OutlinedButton(onClick={busy=true;scope.launch{
+                    message=CloudTeams.movePoolToBank(ctx,gift)
+                    busy=false;tick++
+                }},enabled=gift>0&&gift<=state.pool&&!busy,
+                    modifier=Modifier.fillMaxWidth()){
+                    Text("KÖZÖS KERETBŐL → CSAPATBANKBA",fontSize=11.sp)
+                }
+                Text("Csak virtuális időt mozgatunk. A személyes egyenleg a telefonon tárolódik, ezért a felajánlás az alkalmazás használói közötti bizalmon alapul.",
+                    color=CM,fontSize=11.sp)
             }
             CloudBox("👑 CSAPAT BOSS FIGHT"){
                 val n=state.members.size.coerceAtLeast(1)
