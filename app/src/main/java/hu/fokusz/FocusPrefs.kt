@@ -34,6 +34,10 @@ object FocusPrefs {
     fun setMaxBalance(c: Context, sec: Int) {
         sp(c).edit().putInt("maximum_seconds", sec.coerceIn(1800, 21600)).apply()
     }
+    fun autoRestart(c:Context)=sp(c).getBoolean("auto_restart",false)
+    fun setAutoRestart(c:Context,enabled:Boolean) {
+        sp(c).edit().putBoolean("auto_restart",enabled).apply()
+    }
     fun theme(c: Context) = sp(c).getString("theme", "menta") ?: "menta"
     fun setTheme(c: Context, value: String) { sp(c).edit().putString("theme", value).apply() }
 
