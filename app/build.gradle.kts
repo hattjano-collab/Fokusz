@@ -24,4 +24,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.2")
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
+    implementation("com.google.android.gms:play-services-nearby:19.5.1")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    implementation("com.google.zxing:core:3.5.4")
 }
