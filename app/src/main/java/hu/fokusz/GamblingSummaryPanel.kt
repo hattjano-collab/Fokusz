@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
     val ctx=LocalContext.current
     val today=GambleStats.todayTotals(ctx)
     val history=GambleStats.history(ctx)
-    val remaining=GambleStats.remaining(ctx)
+    val totalStaked=GambleStats.staked(ctx)
     Column(Modifier.fillMaxWidth().background(Color(0xFF182B3F),RoundedCornerShape(22.dp))
         .padding(17.dp),verticalArrangement=Arrangement.spacedBy(11.dp)) {
         Text("📊  MAI JÁTÉKSTATISZTIKA",fontWeight=FontWeight.ExtraBold,
@@ -32,14 +32,9 @@ import androidx.compose.ui.unit.sp
             Text("○ Döntetlen: "+today.third,color=Color(0xFFA7B4CC),fontSize=12.sp)
             Text("× Vereség: "+today.second,color=Color(0xFFFFC78D),fontSize=12.sp)
         }
-        Text("Mai fennmaradó tétkeret: "+duration(remaining),
+        Text("Mai összes megtett tét: "+duration(totalStaked),
             color=Color(0xFFF5F7FF),fontWeight=FontWeight.Bold)
-        LinearProgressIndicator(progress={
-            ((GambleStats.DAILY_STAKE_LIMIT-remaining).toFloat()/
-                GambleStats.DAILY_STAKE_LIMIT).coerceIn(0f,1f)
-        },modifier=Modifier.fillMaxWidth(),
-            color=Color(0xFFB9AAFF),trackColor=Color(0xFF30405C))
-        Text("Egyetlen tét legfeljebb 10 perc, napi összes tét legfeljebb 30 perc. A limit éjfélkor újraindul.",
+        Text("Bármennyi virtuális idő feltehető a saját elérhető egyenlegből. Nincs napi limit. Valódi pénz nem használható.",
             color=Color(0xFFA7B4CC),fontSize=12.sp)
         Text("UTOLSÓ JÁTÉKOK",color=Color(0xFFA7B4CC),
             fontWeight=FontWeight.Bold,fontSize=11.sp)
