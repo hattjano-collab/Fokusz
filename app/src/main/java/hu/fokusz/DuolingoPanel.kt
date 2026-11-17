@@ -74,10 +74,9 @@ private val DGOLD=Color(0xFFFFD58D)
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf(DuolingoStore.lastMessage(ctx)) }
     var refreshed by remember {mutableIntStateOf(0)}
-    val uiRefresh=refreshed
-    val today=DuolingoStore.rewardedToday(ctx)
-    val currentStreak=DuolingoStore.streak(ctx)
-    val xp=DuolingoStore.todayXp(ctx)
+    val today=remember(refreshed,busy,status) { DuolingoStore.rewardedToday(ctx) }
+    val currentStreak=remember(refreshed,busy,status) { DuolingoStore.streak(ctx) }
+    val xp=remember(refreshed,busy,status) { DuolingoStore.todayXp(ctx) }
     val transition=rememberInfiniteTransition(label="Duolingo streak animáció")
     val flameScale by transition.animateFloat(0.96f,1.08f,
         animationSpec=infiniteRepeatable(tween(1050),RepeatMode.Reverse),
@@ -85,9 +84,10 @@ private val DGOLD=Color(0xFFFFD58D)
 
     val permissionRequest=rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()) { refreshed++ }
-    val notificationRefresh=uiRefresh
-    val hasNotify=Build.VERSION.SDK_INT<33 || ContextCompat.checkSelfPermission(
-        ctx,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
+    val hasNotify=remember(refreshed) {
+        Build.VERSION.SDK_INT<33 || ContextCompat.checkSelfPermission(
+            ctx,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
+    }
 
     LaunchedEffect(connected) {
         if(connected) {
