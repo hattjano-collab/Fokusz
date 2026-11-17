@@ -45,8 +45,10 @@ data class CloudTeamView(
  * Nincs szükség gazdatelefonra vagy azonos Wi-Fi-re.
  */
 object CloudTeams {
-    private const val MAX_POOL=86400
-    private const val MAX_BANK=86400
+    // Nincs napi/24 órás keretplafon. A korlát kizárólag a 32 bites
+    // Android időegyenlegek biztonságos tárolásához szükséges.
+    private const val MAX_POOL=Store.MAX_SAFE_SECONDS
+    private const val MAX_BANK=Store.MAX_SAFE_SECONDS
     private val io=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private val starting=AtomicBoolean(false)
     private val leasing=AtomicBoolean(false)
@@ -78,6 +80,7 @@ object CloudTeams {
     }
     fun currentUid()=auth().currentUser?.uid ?: ""
     fun leased(c:Context)=prefs(c).getInt("lease",0).coerceAtLeast(0)
+    fun pendingContribution(c:Context)=prefs(c).getString("contribution","")?.isNotBlank()==true
     private suspend fun ensureAuth():String {
         val existing=auth().currentUser
         if(existing!=null)return existing.uid
@@ -288,6 +291,7 @@ object CloudTeams {
             lastReward=now
             io.launch{flushRewards(c.applicationContext)}
         }
+        if(pendingContribution(c))io.launch{flushContribution(c.applicationContext)}
         // Közös időt csak ténylegesen korlátozott app használatakor kérünk.
     }
     private suspend fun settle(c:Context) {
@@ -427,6 +431,81 @@ object CloudTeams {
         if(n<=20)requestLease(c)
         return true
     }
+    /** Idempotens átutalás a saját képernyőidőből: a helyi időt előbb
+     * lefoglaljuk, majd Firebase-tranzakcióval jóváírjuk. Hálózati hiba
+     * esetén a könyvelési művelet megmarad, és újra próbáljuk. Nem
+     * állítunk ki visszatérítést bizonytalan hálózati eredménynél.
+     */
+    suspend fun contribute(c:Context,seconds:Int,toBank:Boolean):String =
+        withContext(Dispatchers.IO) {
+            if(!active(c))return@withContext "Előbb lépj be egy csapatba."
+            if(seconds<=0)return@withContext "Adj meg pozitív percösszeget."
+            val p=prefs(c)
+            if(pendingContribution(c))return@withContext
+                "Van egy folyamatban lévő átutalás. Előbb azt szinkronizáljuk."
+            val current=Store.bal(c)
+            if(seconds>current)return@withContext "Nincs elég saját képernyőidőd."
+            val uid=try{ensureAuth()}catch(e:Exception){
+                return@withContext "Firebase-kapcsolat szükséges: "+(e.localizedMessage?:"hiba")
+            }
+            val id=uid+"_"+UUID.randomUUID().toString()
+            val operation=JSONObject()
+                .put("eventId",id)
+                .put("amount",seconds)
+                .put("bank",toBank)
+                .put("teamId",teamId(c))
+            // A küldésre lefoglalt pénz nem költhető el közben.
+            val debited=current-Store.addUncapped(c,-seconds.toLong())
+            if(debited!=seconds)return@withContext "Nem sikerült lefoglalni az időt."
+            p.edit().putString("contribution",operation.toString()).commit()
+            val done=flushContribution(c)
+            if(done) "✓ "+duration(seconds)+" a csapat "+
+                (if(toBank)"bankjába"else"közös keretébe")+" került."
+            else "Az idő lefoglalva; internetes kapcsolatkor a csapat automatikusan megkapja."
+        }
+
+    private suspend fun flushContribution(c:Context):Boolean {
+        val p=prefs(c)
+        val raw=p.getString("contribution","")?:""
+        if(raw.isBlank())return true
+        if(!active(c))return false
+        return try {
+            val op=JSONObject(raw)
+            if(op.getString("teamId")!=teamId(c))return false
+            val id=op.getString("eventId")
+            val amount=op.getInt("amount")
+            val toBank=op.optBoolean("bank")
+            ensureAuth()
+            val group=teamRef(c)
+            val event=group.collection("events").document(id)
+            val ok=db().runTransaction{tx->
+                val snap=tx.get(group)
+                val existing=tx.get(event)
+                if(existing.exists())return@runTransaction true
+                val uid=auth().currentUser?.uid?:""
+                val members=snap.get("members") as? Map<*,*>
+                if(members==null||uid !in members)
+                    throw IllegalStateException("Már nem vagy tagja a csapatnak.")
+                val field=if(toBank)"bank"else"pool"
+                val old=snap.getLong(field)?:0L
+                if(old+amount>Store.MAX_SAFE_SECONDS.toLong())
+                    throw IllegalStateException("A technikai időhatár elérve.")
+                tx.update(group,mapOf(field to old+amount,"lastRewardEvent" to id))
+                tx.set(event,mapOf("uid" to uid,"amount" to amount,
+                    "createdAt" to FieldValue.serverTimestamp()))
+                true
+            }.await()
+            if(ok){
+                p.edit().remove("contribution").commit()
+                status="✓ A saját idő befizetése szinkronizálva."
+            }
+            ok
+        }catch(e:Exception){
+            status="Befizetés függőben: "+(e.localizedMessage?:"szinkronhiba")
+            false
+        }
+    }
+
     suspend fun claimBoss(c:Context):String=withContext(Dispatchers.IO) {
         if(!active(c))return@withContext "Nem vagy csapattag."
         try {
