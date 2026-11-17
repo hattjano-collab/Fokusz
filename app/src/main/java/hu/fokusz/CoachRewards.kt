@@ -37,7 +37,9 @@ object CoachRewards {
         ProgressStore.coachReps(c, if(mode=="plank") 0 else 1)
         if(next % goal == 0) {
             val before = Store.bal(c)
-            val after = Store.add(c,120)
+            val bonus=if(FocusPrefs.focusLocked(c) &&
+                mode in setOf("pushups","squats","plank")) 240 else 120
+            val after = Store.add(c,bonus)
             val actual = (after-before).coerceAtLeast(0)
             ProgressStore.earned(c,actual)
             return CoachAward(next,actual)
