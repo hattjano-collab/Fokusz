@@ -17,6 +17,12 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
+import android.os.SystemClock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -43,6 +49,11 @@ class FocusService : Service() {
     private var cover: View? = null
     private var coverQuestMode = false
     private var windowManager: WindowManager? = null
+    private val background=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+    private var lastNotification=0L
+    private var lastChessSync=0L
+    private var lastCalendarReminder=""
+
     private val pulse = object : Runnable {
         override fun run() {
             try { monitor() } catch (_: Exception) { hideCover() }
@@ -56,18 +67,32 @@ class FocusService : Service() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Fókusz figyelés", NotificationManager.IMPORTANCE_LOW))
         val intent = Intent(this, MainActivity::class.java)
         val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setContentTitle("Fókusz aktív")
-            .setContentText("A napi apphasználati idő figyelése bekapcsolva")
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .build()
-        startForeground(2, notification)
+        startForeground(2,liveNotification())
         isRunning = true
         QuestStore.resetClock(this)
         FocusPrefs.resetClock(this)
         handler.post(pulse)
+    }
+
+    private fun liveNotification():Notification {
+        val intent=Intent(this,MainActivity::class.java)
+        val pi=PendingIntent.getActivity(this,0,intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val part=when {
+            QuestStore.isTimerLocked(this) -> "Quest: "+clock(QuestStore.secondsLeft(this))
+            FocusPrefs.focusLocked(this) -> "Fókusz: "+clock(FocusPrefs.focusLeft(this))+
+                (if(FocusPrefs.focusPaused(this))" (szünet)" else "")
+            else -> "Maradék képernyőidő: "+clock(Store.bal(this))
+        }
+        val reminder=CalendarStore.reminderText(this)
+        return Notification.Builder(this,CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+            .setContentTitle(if(reminder!=null)reminder else "Fókusz aktív")
+            .setContentText(QuestStore.current(this)?.title?.take(38)?.let {
+                part+" • "+it
+            } ?: part)
+            .setContentIntent(pi)
+            .setOngoing(true).build()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,6 +107,22 @@ class FocusService : Service() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         QuestStore.tick(this)
         FocusPrefs.tick(this)
+        val elapsed=SystemClock.elapsedRealtime()
+        if(elapsed-lastNotification>=20000L) {
+            lastNotification=elapsed
+            try {
+                val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                nm.notify(2,liveNotification())
+            } catch (_:Exception) {}
+        }
+        if(ChessVerifier.isLinked(this) && elapsed-lastChessSync>=600000L) {
+            lastChessSync=elapsed
+            background.launch {
+                val result=ChessVerifier.dailyProgress(this@FocusService)
+                if(result.success)
+                    QuestStore.verifiedChess(this@FocusService,result.count)
+            }
+        }
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         if (!pm.isInteractive) { hideCover(); return }
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
@@ -179,6 +220,7 @@ class FocusService : Service() {
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacks(pulse)
+        background.cancel()
         hideCover()
         super.onDestroy()
     }
