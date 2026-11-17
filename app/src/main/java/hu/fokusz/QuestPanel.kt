@@ -294,17 +294,6 @@ private val QLILAC = Color(0xFFB9AAFF)
                     }
                 }
             }
-        } else if(selectedTab!=active && active=="custom") {
-            QCard {
-                Text("✦ EGYÉNI QUEST FOLYAMATBAN",color=QWHITE,
-                    fontWeight=FontWeight.Bold)
-                Text("A napi saját feladatodat be kell fejezned, mielőtt másik questet indítasz. A fenti fülek közben szabadon megtekinthetők.",
-                    color=QSOFT)
-                QPrimary("AKTUÁLIS QUEST MEGJELENÍTÉSE") {
-                    selectedTab=if(QuestStore.starterDone(ctx,"chess"))"push" else "chess"
-                    update()
-                }
-            }
         } else if(selectedTab!=active && quest!=null &&
                     selectedTab in listOf("chess","push")) {
             val item=QuestStore.starter(ctx,selectedTab)
