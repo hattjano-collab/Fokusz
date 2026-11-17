@@ -36,9 +36,10 @@ object ProgressStore {
         if (seconds > 0) increment(c, "earned", seconds)
     }
 
-    @Synchronized fun coachReps(c: Context, count: Int) {
+    @Synchronized fun coachReps(c: Context, count: Int, mode: String = "pushups") {
         if(count<=0) return
         increment(c,"reps",count)
+        if(mode=="pushups") increment(c,"pushups",count)
         val p=sp(c)
         p.edit().putInt("total_reps",p.getInt("total_reps",0)+count).apply()
     }
@@ -48,6 +49,7 @@ object ProgressStore {
         increment(c, "tasks", 1)
         if (type == "PUSHUPS") {
             increment(c, "reps", goal)
+            increment(c, "pushups", goal)
             p.edit().putInt("total_reps", p.getInt("total_reps", 0) + goal).apply()
         }
         if (type == "STUDY") {
@@ -86,6 +88,10 @@ object ProgressStore {
     fun totalTasks(c: Context) = sp(c).getInt("total_tasks", 0)
     fun weekTasks(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.tasks }
     fun weekReps(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.exercises }
+    fun weekPushups(c:Context):Int = (0 until LocalDate.now().dayOfWeek.value).sumOf {
+        c.getSharedPreferences("fokusz_day_"+LocalDate.now().minusDays(it.toLong()),0)
+            .getInt("pushups",0)
+    }
     fun weekStudy(c: Context): Int = recent(c, LocalDate.now().dayOfWeek.value).sumOf { it.studying }
     fun milestones(c: Context): List<Pair<String, Boolean>> = listOf(
         "🏁 Első küldetés" to (totalTasks(c) >= 1),
