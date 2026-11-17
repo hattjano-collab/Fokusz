@@ -82,7 +82,7 @@
 </div>
 <div class="toast" id="toast" role="status">✦ +1 fekvőtámasz!</div>
 <script type="module">
-import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/vision_bundle.mjs";
 const el=(id)=>document.getElementById(id);
 const video=el("video"),canvas=el("overlay"),ctx=canvas.getContext("2d");
 let detector=null,stream=null,active=false,facing="user",raf=0,lastFrame=-1;
@@ -193,7 +193,7 @@ function overlay(p,side){
 async function loadModel(){
   if(detector)return;
   setHint("Mozgásfelismerő modell betöltése… az első alkalommal internet szükséges.");
-  const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm");
+  const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm");
   const options={baseOptions:{
     modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
     delegate:"GPU"
