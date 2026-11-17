@@ -98,6 +98,8 @@ object QuestStore {
             .putString("active", NONE)
             .putInt("phase", 0)
             .putInt("reps", 0)
+            .putInt("savedPushReps", 0)
+            .putInt("savedChessPhase", 0)
             .putLong("elapsed", 0L)
             .putLong("last", 0L)
             .putInt("skips", 0)
@@ -166,6 +168,26 @@ object QuestStore {
         if (item !in availableStarters(c)) return false
         if (item == CHESS && !ChessVerifier.isLinked(c)) return false
         setActive(c, item)
+        return true
+    }
+
+    /** A két kötelező quest egymástól függetlenül folytatható.
+     * Sakk közben elkezdhető a fekvő és fordítva; az extra csak utánuk nyílik meg. */
+    @Synchronized fun switchStarter(c: Context, item:String):Boolean {
+        daily(c)
+        if(item !in listOf(CHESS,PUSH))return false
+        if(item==CHESS && (!ChessVerifier.isLinked(c) || chessDone(c)))return false
+        if(item==PUSH && pushDone(c))return false
+        val previous=active(c)
+        if(previous in listOf(EXTRA,CUSTOM) || phase(c)==2)return false
+        if(previous==item)return true
+        val s=sp(c)
+        if(previous==CHESS) s.edit().putInt("savedChessPhase",phase(c)).commit()
+        if(previous==PUSH) s.edit().putInt("savedPushReps",reps(c)).commit()
+        val phase=if(item==CHESS)s.getInt("savedChessPhase",0) else 0
+        val repetitions=if(item==PUSH)s.getInt("savedPushReps",0) else 0
+        setActive(c,item)
+        s.edit().putInt("phase",phase).putInt("reps",repetitions).commit()
         return true
     }
 
