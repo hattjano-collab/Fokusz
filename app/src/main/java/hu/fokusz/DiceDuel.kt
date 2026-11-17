@@ -47,6 +47,8 @@ import java.security.SecureRandom
     var player by remember {mutableIntStateOf(1)}
     var dealer by remember {mutableIntStateOf(1)}
     var rolling by remember {mutableStateOf(false)}
+    var finalPlayer by remember {mutableIntStateOf(1)}
+    var finalDealer by remember {mutableIntStateOf(1)}
     var round by remember {mutableIntStateOf(0)}
     var result by remember {mutableStateOf("Mindkét fél egy fair, hatoldalú kockával dob.")}
     val rotate=remember {Animatable(0f)}
@@ -60,6 +62,8 @@ import java.security.SecureRandom
             delay(90)
         }
         rotate.animateTo(720f,tween(800,easing=LinearEasing))
+        player=finalPlayer
+        dealer=finalDealer
         rolling=false
         val net = result.substringAfter("::", "0").toIntOrNull()
         if(net!=null)result = when {
@@ -100,6 +104,8 @@ import java.security.SecureRandom
             Store.add(context,-stake)
             val x=random.nextInt(6)+1
             val y=random.nextInt(6)+1
+            finalPlayer=x
+            finalDealer=y
             val net=when {
                 x>y -> stake
                 x<y -> -stake
