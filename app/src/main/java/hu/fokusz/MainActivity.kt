@@ -828,7 +828,7 @@ class MainActivity : ComponentActivity() {
             XeropanPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.6", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.7", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
