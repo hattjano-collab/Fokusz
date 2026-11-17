@@ -136,6 +136,8 @@ private val QLILAC = Color(0xFFB9AAFF)
     val p = QuestStore.phase(ctx)
     val doneChess = QuestStore.chessDone(ctx)
     val donePush = QuestStore.pushDone(ctx)
+    val starter0 = QuestStore.starter(ctx,"chess")
+    val starter1 = QuestStore.starter(ctx,"push")
     val pushTarget = QuestStore.pushTarget(ctx)
     val leftSkips = 3 - QuestStore.skips(ctx)
     val customUsed = QuestStore.customUsed(ctx)
@@ -148,7 +150,7 @@ private val QLILAC = Color(0xFFB9AAFF)
 
     // Az egyszer mentett fiókot a sakkquest megnyitásakor és utána percenként újraellenőrzi.
     LaunchedEffect(active, p) {
-        if (active == "chess" && p == 1 && ChessVerifier.isLinked(ctx)) {
+        if (quest?.kind == QuestKind.CHESS && p == 1 && ChessVerifier.isLinked(ctx)) {
             while (true) {
                 chessChecking = true
                 val progress = ChessVerifier.dailyProgress(ctx)
@@ -179,15 +181,16 @@ private val QLILAC = Color(0xFFB9AAFF)
             Text("KÜLDETÉSEK – 3 ABLAK",color=QGREEN,fontWeight=FontWeight.Bold)
             Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
                 val tabs=listOf(
-                    Triple("chess","♟ Sakk",doneChess),
-                    Triple("push","💪 Fekvő",donePush),
+                    Triple("chess",starter0.icon+" "+starter0.title.take(13),doneChess),
+                    Triple("push",starter1.icon+" "+starter1.title.take(13),donePush),
                     Triple("extra","✦ Extra",!doneChess||!donePush)
                 )
                 tabs.forEach { (key,label,done) ->
                     OutlinedButton(
                         modifier=Modifier.weight(1f),
                         enabled=if(key=="extra") !done else !done && (active!="extra" && active!="custom")
-                            && p!=2 && (key!="chess" || ChessVerifier.isLinked(ctx)),
+                            && p!=2 && (key=="extra" || QuestStore.starter(ctx,key).kind!=QuestKind.CHESS
+                                || ChessVerifier.isLinked(ctx)),
                         onClick={
                             if(key=="extra") {
                                 QuestStore.ensureQuest(ctx)
@@ -200,7 +203,7 @@ private val QLILAC = Color(0xFFB9AAFF)
                     ) { Text(if(done && key!="extra")"✓ "+label else label,fontSize=10.sp) }
                 }
             }
-            Text("A sakkpartikat és a kamerás fekvőket félbehagyhatod, és másik kezdő questre válthatsz. A korábbi haladás megmarad.",
+            Text("A két kiválasztott kezdő quest között válthatsz, a haladás és az időzítő állapota megmarad. Az Extra csak utána nyílik meg.",
                 color=QSOFT,fontSize=12.sp)
         }
 
@@ -210,8 +213,10 @@ private val QLILAC = Color(0xFFB9AAFF)
                 Spacer(Modifier.weight(1f))
                 Text(completeCount.toString() + " kész", color = QGREEN, fontWeight = FontWeight.Bold)
             }
-            StarterStatus("♟️  " + QuestStore.chessGoal(ctx) + " sakkmeccs", doneChess, "+5 perc")
-            StarterStatus("💪  " + pushTarget + " fekvőtámasz", donePush, "+10 perc")
+            StarterStatus(starter0.icon+"  "+starter0.title,doneChess,
+                "+"+duration(starter0.reward))
+            StarterStatus(starter1.icon+"  "+starter1.title,donePush,
+                "+"+duration(starter1.reward))
             LinearProgressIndicator(
                 progress = { (listOf(doneChess, donePush).count { it }.toFloat() / 2f) },
                 modifier = Modifier.fillMaxWidth().height(9.dp).clip(CircleShape),
@@ -230,20 +235,19 @@ private val QLILAC = Color(0xFFB9AAFF)
                     fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
                 Text("A két kezdő quest sorrendjét te választod. Mindkettőt meg kell oldani, mielőtt extra feladatot kapsz.",
                     color = QSOFT)
-                if (!doneChess) {
-                    if (ChessVerifier.isLinked(ctx)) {
-                        QPrimary("♟  " + QuestStore.chessGoal(ctx) + " SAKKMECCS  ·  +5 perc") {
-                            QuestStore.chooseStarter(ctx, "chess"); update()
+                listOf("chess" to starter0,"push" to starter1).forEach { (slot,item) ->
+                    if (!QuestStore.starterDone(ctx,slot)) {
+                        if(item.kind==QuestKind.CHESS && !ChessVerifier.isLinked(ctx)) {
+                            Text("A sakkhoz először össze kell kötni a nyilvános sakkfiókodat a Beállításokban.",
+                                color=QYELLOW,fontSize=12.sp)
+                            QSecondary("♟ SAKKFIÓK ÖSSZEKÖTÉSE") { openSettingsTab() }
+                        } else {
+                            QPrimary(item.icon+" "+item.title+"  ·  +"+duration(item.reward)) {
+                                QuestStore.chooseStarter(ctx,slot)
+                                update()
+                            }
                         }
-                    } else {
-                        Text("A sakkquesthez egyszer össze kell kötni a Lichess vagy Chess.com fiókodat a Beállításokban.",
-                            color=QYELLOW, fontSize=12.sp)
-                        QSecondary("SAKKFIÓK ÖSSZEKÖTÉSE") { openSettingsTab() }
                     }
-                }
-                if (!donePush) QPrimary("💪  " + pushTarget + " FEKVŐ  ·  +10 perc") {
-                    QuestStore.chooseStarter(ctx, "push")
-                    update()
                 }
             }
         } else {
