@@ -60,5 +60,25 @@ try {
   await assertSucceeds(batch.commit());
   await assertFails(updateDoc(groupDoc,{pool:1770,lastRewardEvent:eventId}));
   console.log("PASS unique quest bonus is atomic and cannot be replayed");
+  await assertSucceeds(updateDoc(groupDoc,{
+    ["members."+owner]:{...profile("Gazda"),push:100,chess:10,study:10800},
+    bossPush:100,bossChess:10,bossStudy:10800
+  }));
+  await assertSucceeds(updateDoc(guestDoc,{
+    ["members."+guest]:{...profile("Barát"),push:100,chess:10,study:10800},
+    bossPush:200,bossChess:20,bossStudy:21600
+  }));
+  console.log("PASS member achievements add safely to combined team Boss Fight");
+  await assertSucceeds(updateDoc(groupDoc,{
+    pool:3270,
+    bossClaimedAt:serverTimestamp(),
+    bossTargetPush:400,bossTargetChess:40,bossTargetStudy:43200
+  }));
+  await assertFails(updateDoc(groupDoc,{
+    pool:5070,
+    bossClaimedAt:serverTimestamp(),
+    bossTargetPush:600,bossTargetChess:60,bossTargetStudy:64800
+  }));
+  console.log("PASS combined Boss reward is collectible once with cooldown");
   console.log("FIRESTORE_RULES_VALIDATED");
 }finally {await environment.cleanup();}
