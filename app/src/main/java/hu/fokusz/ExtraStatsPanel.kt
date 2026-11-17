@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -18,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -35,36 +38,58 @@ private val SUB=Color(0xFFA7B4CC)
 @Composable fun ExtraStatsPanel() {
     val c=LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { delay(4000); refresh++ } }
+    val uiTick=refresh
     val bank=TimeBank.ready(c)
     val pending=TimeBank.waiting(c)
+    val tomorrow=TimeBank.projectedTomorrow(c)
+    val tomorrowBonus=TimeBank.projectedInterest(c)
+    val todayBonus=TimeBank.earnedToday(c)
     val (reps,chess,study)=BossQuest.progress(c)
     val days=ProgressStore.recent(c)
     val used=days.sumOf { it.usage }
     val estimate=(7*Store.DAILY-used).coerceAtLeast(0)
     Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
-        FeatureBox("🏦 IDŐBANK") {
-            Text("Eltehetsz 5 vagy 15 percet egy későbbi napra. A ma betett idő legkorábban holnap vehető ki. Napi befizetés maximum 30 perc, teljes bank maximum 120 perc.",
+        FeatureBox("🏦 IDŐBANK  •  NAPI +10%") {
+            Text("A bankban tárolt virtuális idő naponta egyszer 10%-kal nő, legfeljebb 120 percig. A ma betett perceket holnaptól használhatod.",
                 color=SUB,fontSize=12.sp)
-            Row {
-                Text("Elérhető: "+duration(bank),modifier=Modifier.weight(1f),color=GREEN,
-                    fontWeight=FontWeight.Bold)
-                Text("Holnaptól: "+duration(pending),color=FG)
+            Column(Modifier.fillMaxWidth().animateContentSize()
+                .background(Color(0xFF1B3B42),RoundedCornerShape(16.dp))
+                .padding(15.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                Text("HOLNAPI VÁRHATÓ EGYENLEG",color=SUB,fontSize=11.sp,fontWeight=FontWeight.Bold)
+                Text(duration(tomorrow),color=GREEN,fontSize=29.sp,fontWeight=FontWeight.Black)
+                Text("Holnapi jóváírás: +" + duration(tomorrowBonus),
+                    color=Color(0xFFFFC78D),fontSize=13.sp)
             }
-            Text("Ma még betehető: "+duration(TimeBank.remainingDaily(c)),color=SUB,fontSize=12.sp)
-            for (v in listOf(300,900)) {
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f).background(Color(0xFF233148),RoundedCornerShape(14.dp))
+                    .padding(12.dp)) {
+                    Text("MOST ELÉRHETŐ",color=SUB,fontSize=10.sp)
+                    Text(duration(bank),color=FG,fontSize=17.sp,fontWeight=FontWeight.Bold)
+                }
+                Column(Modifier.weight(1f).background(Color(0xFF233148),RoundedCornerShape(14.dp))
+                    .padding(12.dp)) {
+                    Text("MA FÉLRETÉVE",color=SUB,fontSize=10.sp)
+                    Text(duration(pending),color=FG,fontSize=17.sp,fontWeight=FontWeight.Bold)
+                }
+            }
+            if(todayBonus>0) Text("✓ A mai napi kamat: +" + duration(todayBonus),
+                color=GREEN,fontSize=13.sp)
+            Text("Mai befizetési keret: " + duration(TimeBank.remainingDaily(c)) + " / 30 perc",
+                color=SUB,fontSize=12.sp)
+            for(v in listOf(300,900)) {
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick={if(TimeBank.deposit(c,v))refresh++},
                         enabled=Store.bal(c)>=v && TimeBank.remainingDaily(c)>=v
-                            && bank+pending+v<=7200,modifier=Modifier.weight(1f)) {
-                        Text("Betesz "+v/60+" p")
-                    }
+                            && bank+pending+v<=TimeBank.MAX_TOTAL,
+                        modifier=Modifier.weight(1f)) { Text("Beteszek " + v/60 + " p") }
                     OutlinedButton(onClick={if(TimeBank.withdraw(c,v))refresh++},
                         enabled=bank>=v && Store.bal(c)+v<=FocusPrefs.maxBalance(c),
-                        modifier=Modifier.weight(1f)) {
-                        Text("Kivesz "+v/60+" p")
-                    }
+                        modifier=Modifier.weight(1f)) { Text("Kiveszek " + v/60 + " p") }
                 }
             }
+            Text("Az összeg a befizetés után rögtön frissül. Az éjfél utáni napi növekedést az app megnyitásakor és nyitott képernyőn is elszámolja. Kerekítés egész másodpercre.",
+                color=SUB,fontSize=11.sp)
         }
         FeatureBox("👑 HETI BOSS QUEST") {
             Text("Teljesítsd mindhárom célt egy naptári héten. Jutalom: +15 perc és Boss-jelvény.",
