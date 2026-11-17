@@ -17,6 +17,8 @@ import androidx.core.content.ContextCompat
 class FokuszBootReceiver:BroadcastReceiver() {
     override fun onReceive(context:Context,intent:Intent?) {
         if(intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        // A Duolingo emlékeztetők a képernyőidő-védelmi autostarttól függetlenek.
+        DuolingoStore.scheduleReminders(context)
         if(!FocusPrefs.autoRestart(context)) return
         val allowed=try {
             UsageGuard.allowed(context)&&Settings.canDrawOverlays(context)
