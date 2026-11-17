@@ -68,6 +68,7 @@ object TeamStore {
         member.put("chess",ChessVerifier.weekGames(c))
         member.put("study",ProgressStore.weekStudy(c))
         member.put("updated",LocalDate.now().toString())
+        member.put("week",weekKey())
         return member
     }
     @Synchronized fun create(c:Context,title:String):Boolean {
@@ -132,8 +133,10 @@ object TeamStore {
         return knownMembers(c).map {
             TeamMember(it.optString("id"),it.optString("name","Tag"),
                 it.optInt("balance",-1),it.optInt("usage",-1),
-                it.optInt("pushups",0),it.optInt("chess",0),
-                it.optInt("study",0),it.optString("updated",""),it.optBoolean("share",false))
+                if(it.optString("week")==weekKey())it.optInt("pushups",0)else 0,
+                if(it.optString("week")==weekKey())it.optInt("chess",0)else 0,
+                if(it.optString("week")==weekKey())it.optInt("study",0)else 0,
+                it.optString("updated",""),it.optBoolean("share",false))
         }
     }
     @Synchronized private fun refreshHostMember(c:Context) {
@@ -148,7 +151,9 @@ object TeamStore {
             else updated.put(entry)
         }
         if(!found)updated.put(mine(c))
-        p(c).edit().putString("members",updated.toString()).apply()
+        val updatedString=updated.toString()
+        if(updatedString!=p(c).getString("members","[]"))
+            p(c).edit().putString("members",updatedString).apply()
     }
     @Synchronized fun settle(c:Context) {
         if(!active(c)||!host(c))return
@@ -229,6 +234,15 @@ object TeamStore {
         if(!found)editor.putInt("pool",(pool(c)+MEMBER_DAILY)
             .coerceAtMost(GROUP_POOL_MAX))
         editor.commit()
+        return true
+    }
+    @Synchronized fun removeMember(c:Context,id:String):Boolean {
+        if(!host(c) || id==hostId(c))return false
+        val list=knownMembers(c)
+        if(list.none{it.optString("id")==id})return false
+        val updated=JSONArray()
+        list.filter{it.optString("id")!=id}.forEach{updated.put(it)}
+        p(c).edit().putString("members",updated.toString()).commit()
         return true
     }
     @Synchronized fun addBonus(c:Context,requestId:String):Boolean {
