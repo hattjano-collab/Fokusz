@@ -39,12 +39,11 @@ private val SUB=Color(0xFFA7B4CC)
     val c=LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(4000); refresh++ } }
-    val uiTick=refresh
-    val bank=TimeBank.ready(c)
-    val pending=TimeBank.waiting(c)
-    val tomorrow=TimeBank.projectedTomorrow(c)
-    val tomorrowBonus=TimeBank.projectedInterest(c)
-    val todayBonus=TimeBank.earnedToday(c)
+    val bank=remember(refresh) { TimeBank.ready(c) }
+    val pending=remember(refresh) { TimeBank.waiting(c) }
+    val tomorrow=remember(refresh) { TimeBank.projectedTomorrow(c) }
+    val tomorrowBonus=remember(refresh) { TimeBank.projectedInterest(c) }
+    val todayBonus=remember(refresh) { TimeBank.earnedToday(c) }
     val (reps,chess,study)=BossQuest.progress(c)
     val days=ProgressStore.recent(c)
     val used=days.sumOf { it.usage }
