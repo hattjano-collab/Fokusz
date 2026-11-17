@@ -70,7 +70,7 @@ private val SUB=Color(0xFFA7B4CC)
             Text("Teljesítsd mindhárom célt egy naptári héten. Jutalom: +15 perc és Boss-jelvény.",
                 color=SUB,fontSize=12.sp)
             val goals=listOf(
-                Triple("Fekvőtámasz és edzés",reps,100),
+                Triple("Fekvőtámasz",reps,100),
                 Triple("Befejezett sakkmeccs",chess,10),
                 Triple("Tanulás másodpercben",study,10800)
             )
