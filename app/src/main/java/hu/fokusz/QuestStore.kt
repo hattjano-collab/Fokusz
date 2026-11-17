@@ -85,12 +85,22 @@ object QuestStore {
         val today = java.time.LocalDate.now().toString()
         if (s.getString("day", "") == today) {
             if (!s.contains("chessGoal")) s.edit().putInt("chessGoal", random.nextInt(5) + 1).commit()
+            if (!s.contains("base0") || !s.contains("base1")) {
+                val choices=BaseQuests.configured(c)
+                s.edit().putInt("base0",choices.first).putInt("base1",choices.second).commit()
+            }
             return
         }
         val previousChess = s.getInt("chessGoal", 0)
         val nextChessGoal = (1..5).filter { it != previousChess }[random.nextInt(if (previousChess in 1..5) 4 else 5)]
+        val choices=BaseQuests.configured(c)
         s.edit()
             .putString("day", today)
+            .putInt("base0",choices.first)
+            .putInt("base1",choices.second)
+            .putInt("slot0Phase",0).putInt("slot1Phase",0)
+            .putInt("slot0Reps",0).putInt("slot1Reps",0)
+            .putLong("slot0Elapsed",0L).putLong("slot1Elapsed",0L)
             .putInt("pushTarget", if (s.contains("pushTarget")) { if (s.getInt("pushTarget", 10) == 10) 20 else 10 } else { if (random.nextBoolean()) 10 else 20 })
             .putBoolean("chessDone", false)
             .putInt("chessGoal", nextChessGoal)
@@ -124,20 +134,30 @@ object QuestStore {
     @Synchronized fun reps(c: Context): Int { daily(c); return sp(c).getInt("reps", 0) }
     @Synchronized fun active(c: Context): String { daily(c); return sp(c).getString("active", NONE) ?: NONE }
     @Synchronized fun startersFinished(c: Context) = chessDone(c) && pushDone(c)
+    @Synchronized fun starter(c:Context,slot:String):Quest {
+        daily(c)
+        val key=if(slot==CHESS)"base0" else "base1"
+        return BaseQuests.actual(c,if(slot==CHESS)0 else 1,
+            sp(c).getInt(key,if(slot==CHESS)0 else 1))
+    }
+    @Synchronized fun starterDone(c:Context,slot:String):Boolean =
+        if(slot==CHESS)chessDone(c) else pushDone(c)
+
+    /** Választás azonnal érvényes, ha ma még nem indult el egyik kezdő feladat sem. */
+    @Synchronized fun applyConfiguredIfIdle(c:Context):Boolean {
+        daily(c)
+        if(chessDone(c)||pushDone(c)||phase(c)!=0||active(c)!=NONE)return false
+        val (a,b)=BaseQuests.configured(c)
+        sp(c).edit().putInt("base0",a).putInt("base1",b).commit()
+        return true
+    }
 
     @Synchronized fun current(c: Context): Quest? {
         daily(c)
         val s = sp(c)
         return when (active(c)) {
-            CHESS -> Quest(-101, "Játssz le " + chessGoal(c) + " sakkmeccset",
-                "A korábban összekötött Lichess vagy Chess.com fiókod nyilvános, befejezett napi partijait ellenőrizzük. Nincs kézi jóváírás.",
-                "♟️", QuestKind.CHESS, chessGoal(c), 300)
-            PUSH -> {
-                val n = pushTarget(c)
-                Quest(-102, n.toString() + " szabályos fekvőtámasz",
-                    "Kamerával ellenőrzött, teljes le–fel fekvőtámasz. A napi cél 10 vagy 20 ismétlés.",
-                    "💪", QuestKind.PUSHUPS, n, 600)
-            }
+            CHESS -> starter(c,CHESS)
+            PUSH -> starter(c,PUSH)
             CUSTOM -> Quest(-103, s.getString("customName", "Saját feladat") ?: "Saját feladat",
                 "15 perc megszakítás nélküli egyéni tevékenység, közben a figyelt közösségi appok zárolva vannak.",
                 "✦", QuestKind.TIMED, 900, 600)
@@ -166,28 +186,34 @@ object QuestStore {
 
     @Synchronized fun chooseStarter(c: Context, item: String): Boolean {
         if (item !in availableStarters(c)) return false
-        if (item == CHESS && !ChessVerifier.isLinked(c)) return false
+        if (starter(c,item).kind==QuestKind.CHESS && !ChessVerifier.isLinked(c)) return false
         setActive(c, item)
         return true
     }
 
-    /** A két kötelező quest egymástól függetlenül folytatható.
-     * Sakk közben elkezdhető a fekvő és fordítva; az extra csak utánuk nyílik meg. */
+    /** A két független kezdő quest között időzített feladat esetén is folytatható a haladás. */
     @Synchronized fun switchStarter(c: Context, item:String):Boolean {
         daily(c)
-        if(item !in listOf(CHESS,PUSH))return false
-        if(item==CHESS && (!ChessVerifier.isLinked(c) || chessDone(c)))return false
-        if(item==PUSH && pushDone(c))return false
+        if(item !in listOf(CHESS,PUSH) || starterDone(c,item))return false
+        if(starter(c,item).kind==QuestKind.CHESS && !ChessVerifier.isLinked(c))return false
         val previous=active(c)
         if(previous in listOf(EXTRA,CUSTOM) || phase(c)==2)return false
         if(previous==item)return true
-        val s=sp(c)
-        if(previous==CHESS) s.edit().putInt("savedChessPhase",phase(c)).commit()
-        if(previous==PUSH) s.edit().putInt("savedPushReps",reps(c)).commit()
-        val phase=if(item==CHESS)s.getInt("savedChessPhase",0) else 0
-        val repetitions=if(item==PUSH)s.getInt("savedPushReps",0) else 0
+        val state=sp(c)
+        if(previous in listOf(CHESS,PUSH)) {
+            val slot=if(previous==CHESS)"slot0" else "slot1"
+            state.edit().putInt(slot+"Phase",phase(c))
+                .putInt(slot+"Reps",reps(c))
+                .putLong(slot+"Elapsed",state.getLong("elapsed",0L)).commit()
+        }
+        val slot=if(item==CHESS)"slot0" else "slot1"
+        val savedPhase=state.getInt(slot+"Phase",0)
+        val savedReps=state.getInt(slot+"Reps",0)
+        val savedElapsed=state.getLong(slot+"Elapsed",0L)
         setActive(c,item)
-        s.edit().putInt("phase",phase).putInt("reps",repetitions).commit()
+        state.edit().putInt("phase",savedPhase).putInt("reps",savedReps)
+            .putLong("elapsed",savedElapsed)
+            .putLong("last",SystemClock.elapsedRealtime()).commit()
         return true
     }
 
@@ -248,7 +274,7 @@ object QuestStore {
     }
 
     @Synchronized fun startChess(c: Context): Boolean {
-        if (active(c) != CHESS || phase(c) != 0) return false
+        if (current(c)?.kind != QuestKind.CHESS || phase(c) != 0) return false
         return sp(c).edit().putInt("phase", 1)
             .putLong("chessStartedAt", System.currentTimeMillis()).commit()
     }
@@ -257,9 +283,10 @@ object QuestStore {
         return sp(c).getLong("chessStartedAt", 0L)
     }
     @Synchronized fun verifiedChess(c: Context, verifiedGames: Int): Boolean {
-        if (active(c) != CHESS || phase(c) != 1 || !ChessVerifier.isLinked(c)
-            || verifiedGames < chessGoal(c)) return false
-        return finish(c, 300, chessGoal(c).toString() + " sakkparti ellenőrizve: +5 perc")
+        val q=current(c)
+        if (q?.kind != QuestKind.CHESS || phase(c) != 1 || !ChessVerifier.isLinked(c)
+            || verifiedGames < q.goal) return false
+        return finish(c, q.reward, q.goal.toString() + " sakkparti ellenőrizve: +" + duration(q.reward))
     }
 
     /** Fekvő és extra fekvő quest: csak a kamerás mozgásfelismerés hívhatja. */
@@ -268,7 +295,7 @@ object QuestStore {
         if (q.id != id || (q.kind != QuestKind.PUSHUPS && q.kind != QuestKind.EXERCISE) || phase(c) != 0) return false
         val n = (reps(c) + 1).coerceAtMost(q.goal)
         sp(c).edit().putInt("reps", n).commit()
-        return if (n == q.goal) finish(c, q.reward, "Fekvőtámaszok teljesítve: +" + duration(q.reward)) else false
+        return if (n == q.goal) finish(c, q.reward, "Mozgásos feladat teljesítve: +" + duration(q.reward)) else false
     }
 
     /** Napi egyszer lecserélheted az aktív questet 15 perc egyéni feladatra. */
