@@ -17,6 +17,11 @@
         <service android:name=".FocusService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started screen-time monitoring and app limit overlay"/>
         </service>
+        <receiver android:name=".DuolingoReminderReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="hu.fokusz.DUOLINGO_REMINDER"/>
+            </intent-filter>
+        </receiver>
         <receiver android:name=".FokuszBootReceiver" android:enabled="true" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
         </receiver>
