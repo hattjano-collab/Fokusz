@@ -160,9 +160,19 @@ class FocusService : Service() {
             } else if (locked) {
                 showCover(true)
             } else if (FocusPrefs.blocked(this, currentPackage)) {
-                if (Store.bal(this) > 0) Store.add(this, -1)
-                ProgressStore.used(this, 1)
-                if (Store.bal(this) <= 0) showCover(false) else hideCover()
+                val personal=Store.bal(this)
+                val spent=if(personal>0) {
+                    Store.add(this,-1)
+                    true
+                } else {
+                    TeamStore.spendTeamSecond(this)
+                }
+                if(spent) {
+                    ProgressStore.used(this,1)
+                    hideCover()
+                } else {
+                    showCover(false)
+                }
             } else {
                 hideCover()
             }
