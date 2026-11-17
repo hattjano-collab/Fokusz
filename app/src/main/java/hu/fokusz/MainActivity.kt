@@ -279,7 +279,7 @@ class MainActivity : ComponentActivity() {
 @Composable fun FokuszApp(openTab:Int = -1) {
     val ctx = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(openTab) { if(openTab in 0..9) tab=openTab }
+    LaunchedEffect(openTab) { if(openTab in 0..10) tab=openTab }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
@@ -288,6 +288,7 @@ class MainActivity : ComponentActivity() {
 
     var minutes by rememberSaveable { mutableStateOf("1") }
     var seconds by rememberSaveable { mutableStateOf("00") }
+    var confirmAllIn by remember { mutableStateOf(false) }
     val m = minutes.toIntOrNull()
     val s = seconds.toIntOrNull()
     val stake = if (m != null && s != null && m in 0..999 && s in 0..59) m * 60 + s else 0
@@ -480,7 +481,8 @@ class MainActivity : ComponentActivity() {
                         Triple(6,"⚙","Beállítások"),
                         Triple(7,"▦","Naptár"),
                         Triple(8,"🔥","Duolingo"),
-                        Triple(9,"👥","Csapatok")
+                        Triple(9,"👥","Csapatok"),
+                        Triple(10,"📚","Xeropan")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -593,6 +595,31 @@ class MainActivity : ComponentActivity() {
                             onClick = { if (!live) { minutes = (v / 60).toString(); seconds = String.format(Locale.ROOT, "%02d", v % 60) } }
                         )
                     }
+                }
+                OutlinedButton(onClick={confirmAllIn=true},
+                    enabled=bal>0&&!live&&!coinFlipping,
+                    modifier=Modifier.fillMaxWidth()) {
+                    Text("♠ ALL IN  •  teljes saját időegyenleg")
+                }
+                if(confirmAllIn) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest={confirmAllIn=false},
+                        title={Text("ALL IN – megerősítés")},
+                        text={Text("Biztosan a teljes "+clock(bal)+
+                            " saját képernyőidődet szeretnéd kockáztatni? A csapatidőre ez nem vonatkozik.")},
+                        confirmButton={
+                            androidx.compose.material3.TextButton(onClick={
+                                minutes=(bal/60).toString()
+                                seconds=String.format(Locale.ROOT,"%02d",bal%60)
+                                confirmAllIn=false
+                            }){Text("IGEN, ALL IN")}
+                        },
+                        dismissButton={
+                            androidx.compose.material3.TextButton(onClick={confirmAllIn=false}) {
+                                Text("MÉGSEM")
+                            }
+                        }
+                    )
                 }
                 if (!wagerValid) {
                     Text(
@@ -791,10 +818,12 @@ class MainActivity : ComponentActivity() {
             DuolingoPanel()
         }
         else if(tab==9) {
-            TeamPanel()
+            CloudTeamPanel()
+        } else if(tab==10) {
+            XeropanPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.5", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.6", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
