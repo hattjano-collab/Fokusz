@@ -34,7 +34,7 @@ object CoachRewards {
         val previous = s.getInt("total_$mode",0)
         val next = previous + 1
         s.edit().putInt("total_$mode",next).commit()
-        ProgressStore.coachReps(c, if(mode=="plank") 0 else 1)
+        ProgressStore.coachReps(c, if(mode=="plank") 0 else 1, mode)
         if(next % goal == 0) {
             val before = Store.bal(c)
             val bonus=if(FocusPrefs.focusLocked(c) &&
