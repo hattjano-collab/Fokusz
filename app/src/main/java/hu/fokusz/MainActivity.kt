@@ -451,7 +451,8 @@ class MainActivity : ComponentActivity() {
                         Triple(3,"▥","Statisztika"),
                         Triple(4,"◎","AI-edző"),
                         Triple(5,"◉","Fókuszmód"),
-                        Triple(6,"⚙","Beállítások")
+                        Triple(6,"⚙","Beállítások"),
+                        Triple(7,"▦","Naptár")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -494,7 +495,7 @@ class MainActivity : ComponentActivity() {
                 Text("☰  MENÜ",fontWeight=FontWeight.Bold)
             }
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
-                "AI-edző","Fókuszmód","Beállítások").getOrElse(tab) { "Fókusz" },
+                "AI-edző","Fókuszmód","Beállítások","Naptár").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
@@ -724,9 +725,11 @@ class MainActivity : ComponentActivity() {
             FocusPanel(isRunning, usageOk, overlayOk) { tab = 2 }
         } else if (tab == 6) {
             OptionsPanel()
+        } else if (tab == 7) {
+            CalendarPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.1", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.2", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
