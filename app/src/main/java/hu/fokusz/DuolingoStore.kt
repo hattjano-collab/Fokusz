@@ -125,9 +125,10 @@ object DuolingoStore {
             var xp=0
             if(id>0) {
                 try {
-                    val date=today.toString()
+                    val from=today.minusDays(1).toString()
+                    val until=today.plusDays(1).toString()
                     val address="https://www.duolingo.com/2017-06-30/users/$id/xp_summaries"+
-                        "?startDate=$date&endDate=$date&timezone="+
+                        "?startDate=$from&endDate=$until&timezone="+
                         URLEncoder.encode(zone.id,"UTF-8")
                     val response=request(address).trim()
                     val summaries=if(response.startsWith("["))JSONArray(response)
