@@ -311,6 +311,7 @@ private fun teamQR(value:String):android.graphics.Bitmap?=try {
                         else "A kilépés törli a helyi csapattagságodat.",
                         color=TY,fontSize=12.sp)
                     Button(onClick={
+                        TeamNearby.leave(ctx)
                         try{ctx.stopService(Intent(ctx,TeamSyncService::class.java))}
                         catch(_:Exception){}
                         TeamNearby.stop()
