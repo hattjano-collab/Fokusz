@@ -138,6 +138,12 @@ service cloud.firestore {
         && request.resource.data.members.keys().size() ==
              resource.data.members.keys().size() - 1
         && resource.data.ownerUid in request.resource.data.members
+        && request.resource.data.members.diff(resource.data.members)
+             .removedKeys().size() == 1
+        && request.resource.data.members.diff(resource.data.members)
+             .addedKeys().size() == 0
+        && request.resource.data.members.diff(resource.data.members)
+             .changedKeys().size() == 0
         && (uid == resource.data.ownerUid ||
              !(uid in request.resource.data.members))
         && request.resource.data.bossTargetPush == resource.data.bossTargetPush - 100
