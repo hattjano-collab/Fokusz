@@ -52,6 +52,7 @@ class FocusService : Service() {
     private val background=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private var lastNotification=0L
     private var lastChessSync=0L
+    private var lastDuolingoSync=0L
     private var lastCalendarReminder=""
 
     private val pulse = object : Runnable {
@@ -122,6 +123,11 @@ class FocusService : Service() {
                 if(result.success)
                     QuestStore.verifiedChess(this@FocusService,result.count)
             }
+        }
+        if(DuolingoStore.linked(this) && !DuolingoStore.rewardedToday(this)
+            && elapsed-lastDuolingoSync>=5400000L) {
+            lastDuolingoSync=elapsed
+            background.launch { DuolingoStore.check(this@FocusService) }
         }
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         if (!pm.isInteractive) { hideCover(); return }
