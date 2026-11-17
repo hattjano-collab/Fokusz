@@ -345,7 +345,7 @@ object QuestStore {
         val before = Store.bal(c)
         val adjustedReward = if (FocusPrefs.focusLocked(c) &&
             q?.mode in setOf("pushups","squats","plank") &&
-            q.kind in setOf(QuestKind.PUSHUPS,QuestKind.EXERCISE)) reward*2
+            q?.kind in setOf(QuestKind.PUSHUPS,QuestKind.EXERCISE)) reward*2
             else reward
         Store.add(c, adjustedReward)
         val studyIds = setOf(3, 6, 12, 13, 14, 15, 16)
