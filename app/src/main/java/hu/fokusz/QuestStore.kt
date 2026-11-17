@@ -139,7 +139,10 @@ object QuestStore {
             CUSTOM -> Quest(-103, s.getString("customName", "Saját feladat") ?: "Saját feladat",
                 "15 perc megszakítás nélküli egyéni tevékenység, közben a figyelt közösségi appok zárolva vannak.",
                 "✦", QuestKind.TIMED, 900, 600)
-            EXTRA -> byId[s.getInt("extraId", -1)]
+            EXTRA -> byId[s.getInt("extraId", -1)]?.let { original ->
+                val adjusted=s.getInt("extraGoal",original.goal)
+                original.copy(goal=adjusted)
+            }
             else -> null
         }
     }
@@ -175,19 +178,45 @@ object QuestStore {
         if (bag.isEmpty()) {
             val weekend = java.time.LocalDate.now().dayOfWeek.value >= 6
             val daytime = java.time.LocalTime.now().hour in 8..19
-            val prioritized = all.map { it to (random.nextInt(100) + when {
-                weekend && daytime && it.id in setOf(4, 5, 26, 27, 28, 29, 30, 31, 33) -> 55
-                !weekend && it.id in setOf(3, 7, 12, 13, 14, 15, 16, 23, 24, 25) -> 55
-                !daytime && it.id in setOf(4, 5, 26, 27, 28, 33) -> -80
-                else -> 0
-            }) }.sortedByDescending { it.second }.map { it.first.id }
+            val schoolDay = CalendarStore.schoolEventToday(c) || !weekend
+            val busySoon = CalendarStore.busySoon(c)
+            val exercisesThisWeek=ProgressStore.weekReps(c)
+            val priorDays=ProgressStore.recent(c,7)
+            val heavierDay=priorDays.lastOrNull()?.exercises ?: 0
+            val prioritized = all.map { q ->
+                val longQuest = q.kind==QuestKind.TIMED && q.goal>=1200
+                val moving = q.kind==QuestKind.EXERCISE || q.kind==QuestKind.PUSHUPS ||
+                    q.id in setOf(4, 5, 26, 27, 28, 29, 30, 31, 33)
+                q to (random.nextInt(100) + when {
+                    busySoon && longQuest -> -180
+                    busySoon && !longQuest -> 70
+                    schoolDay && q.id in setOf(3, 7, 12, 13, 14, 15, 16, 23, 24, 25) -> 55
+                    weekend && daytime && moving -> 45
+                    !daytime && q.id in setOf(4,5,26,27,28,33) -> -100
+                    heavierDay>=50 && moving -> -80
+                    exercisesThisWeek<20 && moving -> 35
+                    else -> 0
+                })
+            }.sortedByDescending { it.second }.map { it.first.id }
             bag.addAll(prioritized)
             if (bag.size > 1 && bag.first() == old) bag.add(bag.removeAt(0))
         }
         val id = bag.removeAt(0)
-        s.edit().putInt("extraId", id).putString("bag", bag.joinToString(",")).commit()
+        val base=byId.getValue(id)
+        val activities=ProgressStore.recent(c,7)
+        val completed=activities.sumOf { it.tasks }
+        val target=when(base.kind) {
+            QuestKind.PUSHUPS,QuestKind.EXERCISE -> when {
+                completed >= 12 && activities.last().exercises<30 -> (base.goal*1.1).toInt().coerceAtLeast(base.goal)
+                completed < 3 -> (base.goal*0.9).toInt().coerceAtLeast(if(base.mode=="plank")15 else 5)
+                else -> base.goal
+            }
+            else -> base.goal
+        }
+        s.edit().putInt("extraId", id).putInt("extraGoal",target)
+            .putString("bag", bag.joinToString(",")).commit()
         setActive(c, EXTRA)
-        return byId.getValue(id)
+        return base.copy(goal=target)
     }
 
     /** A két napi kezdő quest után jöhetnek csak extra feladatok. */
