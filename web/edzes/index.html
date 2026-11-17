@@ -86,7 +86,7 @@ import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@m
 const el=(id)=>document.getElementById(id);
 const video=el("video"),canvas=el("overlay"),ctx=canvas.getContext("2d");
 let detector=null,stream=null,active=false,facing="user",raf=0,lastFrame=-1;
-let count=0,goal=10,stage=0,lastRepAt=0,poseState="Várakozás",lastMeasure=0,notified=false;
+let count=0,goal=10,stage=0,lastRepAt=-1e9,poseState="Várakozás",lastMeasure=0,notified=false;
 const LEFT=[11,13,15],RIGHT=[12,14,16],MINSCORE=.38;
 const LOWER=120,UPPER=145,COOLDOWN=450;
 const CONNECT=[[11,13],[13,15],[12,14],[14,16]];
@@ -257,7 +257,7 @@ el("flipBtn").addEventListener("click",async()=>{
   canvas.classList.toggle("front",facing==="user");
   const was=active;if(was){await stop();await start();}
 });
-el("resetBtn").addEventListener("click",()=>{count=0;stage=0;lastRepAt=0;updateScore();setHint("Számláló nullázva. Indulj fentről.");});
+el("resetBtn").addEventListener("click",()=>{count=0;stage=0;lastRepAt=-1e9;updateScore();setHint("Számláló nullázva. Indulj fentről.");});
 el("presets").addEventListener("click",e=>{
   const selected=e.target.closest("[data-goal]");
   if(!selected)return;
