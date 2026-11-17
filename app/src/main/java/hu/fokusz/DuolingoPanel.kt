@@ -74,6 +74,7 @@ private val DGOLD=Color(0xFFFFD58D)
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf(DuolingoStore.lastMessage(ctx)) }
     var refreshed by remember {mutableIntStateOf(0)}
+    val uiRefresh=refreshed
     val today=DuolingoStore.rewardedToday(ctx)
     val currentStreak=DuolingoStore.streak(ctx)
     val xp=DuolingoStore.todayXp(ctx)
@@ -84,6 +85,7 @@ private val DGOLD=Color(0xFFFFD58D)
 
     val permissionRequest=rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()) { refreshed++ }
+    val notificationRefresh=uiRefresh
     val hasNotify=Build.VERSION.SDK_INT<33 || ContextCompat.checkSelfPermission(
         ctx,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
 
