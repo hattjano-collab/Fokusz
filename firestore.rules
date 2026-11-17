@@ -25,8 +25,8 @@ service cloud.firestore {
         && p.name is string && p.name.size() >= 2 && p.name.size() <= 24
         && p.share is bool
         && p.personalLeft is int && p.personalLeft >= -1
-        && p.personalLeft <= 21600
-        && p.used is int && p.used >= -1 && p.used <= 86400
+        && p.personalLeft <= 2000000000
+        && p.used is int && p.used >= -1 && p.used <= 2000000000
         && (!p.share ? (p.personalLeft == -1 && p.used == -1) : true)
         && p.push is int && p.push >= 0
         && p.chess is int && p.chess >= 0
@@ -49,7 +49,7 @@ service cloud.firestore {
         && request.resource.data.joinProof == resource.data.inviteKey + ':' + uid
         && request.resource.data.joinProof != resource.data.joinProof
         && request.resource.data.pool == resource.data.pool + 600
-        && request.resource.data.pool <= 86400
+        && request.resource.data.pool <= 2000000000
         && request.resource.data.bossTargetPush == resource.data.bossTargetPush + 100
         && request.resource.data.bossTargetChess == resource.data.bossTargetChess + 10
         && request.resource.data.bossTargetStudy == resource.data.bossTargetStudy + 10800;
@@ -99,7 +99,7 @@ service cloud.firestore {
         && request.resource.data.pool ==
              resource.data.members.keys().size() * 600
         && request.resource.data.bank ==
-             (nextBank > 86400 ? 86400 : nextBank);
+             (nextBank > 2000000000 ? 2000000000 : nextBank);
     }
     function validQuestReward(team) {
       let eventId = request.resource.data.lastRewardEvent;
@@ -113,7 +113,44 @@ service cloud.firestore {
         && getAfter(eventPath(team,eventId)).data.uid == request.auth.uid
         && getAfter(eventPath(team,eventId)).data.amount == 300
         && request.resource.data.pool == resource.data.pool + 300
-        && request.resource.data.pool <= 86400;
+        && request.resource.data.pool <= 2000000000;
+    }
+    function validPersonalContribution(team) {
+      // Egy csapattag csak az időkeretet VAGY a bankot emelheti, és
+      // ehhez egy egyedi, egyszer beírható Firebase-esemény kell.
+      // A személyes idő helyi, kliensoldali levonása Spark csomagban
+      // nem ellenőrizhető szerveroldalról; ez bizalmi csoportfunkció.
+      let uid = request.auth.uid;
+      let eventId = request.resource.data.lastRewardEvent;
+      let poolDelta = request.resource.data.pool - resource.data.pool;
+      let bankDelta = request.resource.data.bank - resource.data.bank;
+      let contribution = poolDelta + bankDelta;
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pool','bank','lastRewardEvent'])
+        && eventId is string
+        && eventId.matches(uid + '_[A-Za-z0-9-]+')
+        && eventId.size() >= 20 && eventId.size() <= 160
+        && eventId != resource.data.lastRewardEvent
+        && !exists(eventPath(team,eventId))
+        && existsAfter(eventPath(team,eventId))
+        && getAfter(eventPath(team,eventId)).data.uid == uid
+        && getAfter(eventPath(team,eventId)).data.amount == contribution
+        && contribution > 0 && contribution <= 2000000000
+        && ((poolDelta > 0 && bankDelta == 0) ||
+            (bankDelta > 0 && poolDelta == 0))
+        && request.resource.data.pool <= 2000000000
+        && request.resource.data.bank <= 2000000000;
+    }
+    function validBankTransfer() {
+      // A közös keretből a bankba helyezett idő nem teremthet
+      // plusz perceket, csak átcsoportosítja a meglévőket.
+      let delta = resource.data.pool - request.resource.data.pool;
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pool','bank'])
+        && delta > 0
+        && request.resource.data.pool >= 0
+        && request.resource.data.bank == resource.data.bank + delta
+        && request.resource.data.bank <= 2000000000;
     }
     function validBossReward() {
       let n = resource.data.members.keys().size();
@@ -126,7 +163,7 @@ service cloud.firestore {
         && resource.data.bossClaimedAt + duration.value(7,'d') <= request.time
         && request.resource.data.bossClaimedAt == request.time
         && request.resource.data.pool == resource.data.pool + n * 900
-        && request.resource.data.pool <= 86400
+        && request.resource.data.pool <= 2000000000
         && request.resource.data.bossTargetPush == resource.data.bossPush + n * 100
         && request.resource.data.bossTargetChess == resource.data.bossChess + n * 10
         && request.resource.data.bossTargetStudy == resource.data.bossStudy + n * 10800;
@@ -182,7 +219,8 @@ service cloud.firestore {
       allow update: if validJoin() ||
         (isMember() &&
           (validProfileUpdate() || validSpend() || validDailySettlement()
-            || validQuestReward(teamId) || validBossReward()
+            || validQuestReward(teamId) || validPersonalContribution(teamId) ||
+            validBankTransfer() || validBossReward()
             || validMemberRemoval()));
       allow delete: if isMember() &&
         resource.data.ownerUid == request.auth.uid;
@@ -196,7 +234,9 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly(['uid','amount','createdAt'])
           && request.resource.data.keys().hasAll(['uid','amount','createdAt'])
           && request.resource.data.uid == request.auth.uid
-          && request.resource.data.amount == 300
+          && request.resource.data.amount is int
+          && request.resource.data.amount > 0
+          && request.resource.data.amount <= 2000000000
           && request.resource.data.createdAt == request.time
           && request.auth.uid in get(teamPath(teamId)).data.members
           && getAfter(teamPath(teamId)).data.lastRewardEvent == eventId;
