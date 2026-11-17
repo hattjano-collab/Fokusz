@@ -89,6 +89,9 @@ object CloudTeams {
         val start=LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant()
         return Timestamp(Date.from(start))
     }
+    private fun totalChessCount(c:Context):Int =
+        maxOf(ProgressStore.totalChess(c),
+            ChessVerifier.wins(c)+ChessVerifier.losses(c)+ChessVerifier.draws(c))
     private fun profile(c:Context):Map<String,Any> {
         val p=prefs(c)
         val share=sharing(c)
@@ -98,7 +101,7 @@ object CloudTeams {
             "personalLeft" to if(share)Store.bal(c) else -1,
             "used" to if(share)(ProgressStore.recent(c,1).lastOrNull()?.usage ?: 0) else -1,
             "push" to (ProgressStore.totalReps(c)-p.getInt("basePush",0)).coerceAtLeast(0),
-            "chess" to (ProgressStore.totalChess(c)-p.getInt("baseChess",0)).coerceAtLeast(0),
+            "chess" to (totalChessCount(c)-p.getInt("baseChess",0)).coerceAtLeast(0),
             "study" to (ProgressStore.totalStudy(c)-p.getInt("baseStudy",0)).coerceAtLeast(0),
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -108,7 +111,7 @@ object CloudTeams {
             .putString("teamId",id).putString("teamName",label)
             .putString("key",key).putBoolean("owner",owner)
             .putInt("basePush",ProgressStore.totalReps(c))
-            .putInt("baseChess",ProgressStore.totalChess(c))
+            .putInt("baseChess",totalChessCount(c))
             .putInt("baseStudy",ProgressStore.totalStudy(c))
             .putInt("lease",0).putString("pending","[]").commit()
     }
