@@ -116,7 +116,7 @@ private class PushupCounter {
 }
 
 @OptIn(ExperimentalGetImage::class)
-@Composable fun PushupCamera(questId: Int, mode: String = "pushups", onRep: () -> Unit) {
+@Composable fun PushupCamera(questId: Int, mode: String = "pushups", onIssue: ((String) -> Unit)? = null, onRep: () -> Unit) {
     val context = LocalContext.current
     val owner = context as ComponentActivity
     var granted by remember {
@@ -130,6 +130,9 @@ private class PushupCounter {
         if (!it) hint = "A számláláshoz engedélyezned kell a kamerát."
     }
     val onRepUpdated by rememberUpdatedState(onRep)
+    val onIssueUpdated by rememberUpdatedState(onIssue)
+    var lastIssueAt by remember { mutableStateOf(0L) }
+    var lastIssueText by remember { mutableStateOf("") }
     val speaker = remember { TextToSpeech(context) { } }
     var spokenAt by remember { mutableStateOf(0L) }
     DisposableEffect(speaker) { onDispose { speaker.shutdown() } }
@@ -191,6 +194,17 @@ private class PushupCounter {
                                             val f = if (mode == "pushups") counter.analyze(pose) else exerciseCounter.analyze(pose)
                                             hint = f.message
                                             if (f.rep) onRepUpdated()
+                                            val nowFeedback=SystemClock.elapsedRealtime()
+                                            val invalid=f.message.contains("egyenes",true) ||
+                                                f.message.contains("mélység",true) ||
+                                                f.message.contains("Nem",true) ||
+                                                f.message.contains("Még hajlítsd",true)
+                                            if (invalid && (nowFeedback-lastIssueAt>4000L ||
+                                                f.message!=lastIssueText && nowFeedback-lastIssueAt>2000L)) {
+                                                lastIssueAt=nowFeedback
+                                                lastIssueText=f.message
+                                                onIssueUpdated?.invoke(f.message)
+                                            }
                                             val now=SystemClock.elapsedRealtime()
                                             if (now-spokenAt>4000L || (f.rep && now-spokenAt>700L)) {
                                                 if (f.rep || f.message.contains("egyenes") || f.message.contains("térded")) {
