@@ -271,7 +271,7 @@ class MainActivity : ComponentActivity() {
     val m = minutes.toIntOrNull()
     val s = seconds.toIntOrNull()
     val stake = if (m != null && s != null && m in 0..999 && s in 0..59) m * 60 + s else 0
-    val wagerValid = stake > 0 && stake <= bal
+    val wagerValid = stake > 0 && stake <= bal && GambleStats.canBet(ctx, stake)
 
     var selectedSide by remember { mutableStateOf("") }
     var coinResult by remember { mutableStateOf("") }
@@ -318,6 +318,7 @@ class MainActivity : ComponentActivity() {
     fun coinFlip(choice: String) {
         if (!wagerValid || coinFlipping || live) return
         val bet = stake
+        if (!GambleStats.reserve(ctx,bet)) return
         Store.add(ctx, -bet)
         // Minden dobásnál független, 50-50% esélyű véletlenszám.
         val result = if (Shoe.rnd.nextBoolean()) "Fej" else "Írás"
@@ -328,6 +329,7 @@ class MainActivity : ComponentActivity() {
         coinResult = result
         coinWon = won
         coinNote = if (won) "Nyertél! +" + duration(bet) else "Most nem sikerült. −" + duration(bet)
+        GambleStats.record(ctx,"Érmedobás",if(won)bet else -bet)
         coinFlipping = true
         flipCounter++
     }
@@ -361,6 +363,7 @@ class MainActivity : ComponentActivity() {
         val difference = paid - spent
         bjMessage = if (difference >= 0) "Kör eredménye: +" + duration(difference)
                     else "Kör eredménye: −" + duration(abs(difference))
+        GambleStats.record(ctx,"Blackjack",difference)
     }
 
     fun next(hs: List<Hand>) {
@@ -373,6 +376,7 @@ class MainActivity : ComponentActivity() {
     fun deal() {
         if (!wagerValid || live) return
         val bet = stake
+        if(!GambleStats.reserve(ctx,bet))return
         Store.add(ctx, -bet)
         val player = listOf(Shoe.draw(), Shoe.draw())
         val dc = listOf(Shoe.draw(), Shoe.draw())
@@ -390,6 +394,7 @@ class MainActivity : ComponentActivity() {
                 else -> "Az osztónak blackjackje van · −" + duration(bet)
             }
             hands = listOf(Hand(player, bet, done = true, res = bjMessage))
+            GambleStats.record(ctx,"Blackjack",paid-bet)
         } else {
             hands = listOf(Hand(player, bet))
             live = true
@@ -408,13 +413,14 @@ class MainActivity : ComponentActivity() {
     fun stand() { next(replaceHand(hands[active].copy(done = true))) }
     fun doubleDown() {
         val h = hands[active]
-        if (bal < h.bet) return
+        if (bal < h.bet || !GambleStats.reserve(ctx,h.bet)) return
         Store.add(ctx, -h.bet)
         next(replaceHand(h.copy(cards = h.cards + Shoe.draw(), bet = h.bet * 2, done = true)))
     }
     fun split() {
         val h = hands[active]
         if (bal < h.bet || hands.size >= 4 || h.cards.size != 2 || rv(h.cards[0]) != rv(h.cards[1])) return
+        if(!GambleStats.reserve(ctx,h.bet))return
         Store.add(ctx, -h.bet)
         val ace = h.cards[0] % 13 == 0
         val a = Hand(listOf(h.cards[0], Shoe.draw()), h.bet, done = ace, ace = ace)
@@ -427,9 +433,9 @@ class MainActivity : ComponentActivity() {
 
     val current = hands.getOrNull(active)
     val canMove = live && current != null && !current.done
-    val canDouble = canMove && current!!.cards.size == 2 && bal >= current.bet
+    val canDouble = canMove && current!!.cards.size == 2 && GambleStats.canBet(ctx,current.bet)
     val canSplit = canMove && current!!.cards.size == 2 && rv(current.cards[0]) == rv(current.cards[1]) &&
-        hands.size < 4 && !current.ace && bal >= current.bet
+        hands.size < 4 && !current.ace && GambleStats.canBet(ctx,current.bet)
     val betEnabled = wagerValid && !live && !coinFlipping
 
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
@@ -539,7 +545,9 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!wagerValid) {
                     Text(
-                        if (stake <= 0) "Adj meg érvényes, legalább 1 másodperces tétet (0–59 mp)!"
+                        if (stake <= 0) "Adj meg érvényes tétet (0–59 mp másodpercmező)!"
+                        else if(stake>GambleStats.SINGLE_STAKE_LIMIT) "Egy körben legfeljebb 10 percet tehetsz fel."
+                        else if(stake>GambleStats.remaining(ctx)) "Mára elfogyott a 30 perces játék-tétkereted."
                         else "Ehhez a téthez nincs elegendő időegyenleged.",
                         color = Gold, fontSize = 12.sp
                     )
@@ -596,6 +604,8 @@ class MainActivity : ComponentActivity() {
                 Text("Minden dobás független véletlen esemény. A nyeremény nettó +1× tét.",
                     color = Muted, fontSize = 11.sp)
             }
+
+            DiceDuel(stake=stake,enabled=betEnabled) { bal=Store.bal(ctx) }
 
             GlassCard(colors = listOf(Color(0xFF242741), Panel)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -656,6 +666,7 @@ class MainActivity : ComponentActivity() {
                 Text("Split: azonos értékű kártyáknál, legfeljebb 4 kézig. Az új kézhez külön fedezet kell.",
                     color = Muted, fontSize = 11.sp)
             }
+            GamblingSummaryPanel(GambleStats.staked(ctx))
         } else if (tab == 1) {
             QuestPanel(isRunning, usageOk, overlayOk, { tab = 2 }, { tab = 6 })
         } else if (tab == 2) {
@@ -729,7 +740,7 @@ class MainActivity : ComponentActivity() {
             CalendarPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.2", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  2.3", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
