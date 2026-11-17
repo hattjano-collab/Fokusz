@@ -134,6 +134,13 @@ object TeamNearby {
                         }
                     }
                     "boss" -> { TeamStore.claimBoss(c);broadcast(c) }
+                    "leave" -> {
+                        if(TeamStore.removeMember(c,id)) {
+                            peers.remove(endpointId)
+                            client?.disconnectFromEndpoint(endpointId)
+                            broadcast(c)
+                        }
+                    }
                     "refresh" -> sendTo(endpointId,TeamStore.snapshot(c))
                 }
             } else if(endpointId==guestEndpoint) {
@@ -278,6 +285,11 @@ object TeamNearby {
                     lastLease=now;requestLease(c)
                 }
             }
+        }
+    }
+    fun leave(c:Context) {
+        if(!TeamStore.host(c))guestEndpoint?.let {
+            sendTo(it,JSONObject().put("type","leave"))
         }
     }
     fun requestBoss(c:Context) {
