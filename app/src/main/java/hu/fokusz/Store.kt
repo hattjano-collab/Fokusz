@@ -5,6 +5,9 @@ import java.time.LocalDate
 
 object Store {
     const val DAILY = 1800 // 30 perc másodpercben
+    // Gyakorlati, egész számokkal biztonságosan kezelhető műszaki plafon (~63 év),
+    // nincs napi vagy játékalkalmakra vonatkozó korlátozás.
+    const val MAX_SAFE_SECONDS = 2_000_000_000
     val BLOCKED = setOf(
         "com.zhiliaoapp.musically", "com.ss.android.ugc.trill", "com.instagram.android",
         "com.google.android.youtube", "com.snapchat.android", "com.twitter.android",
@@ -31,11 +34,27 @@ object Store {
         if (s.getString("d", "") != today) s.edit().putString("d", today).putInt("b", DAILY).apply()
         return s.getInt("b", DAILY)
     }
-    @Synchronized fun add(c: Context, sec: Int): Int {
-        val max = FocusPrefs.maxBalance(c)
-        val n = (bal(c).toLong() + sec).coerceIn(0L, max.toLong()).toInt()
-        sp(c).edit().putInt("b", n).apply()
-        if (sec > 0 || n % 15 == 0) ProgressStore.updateWidget(c)
+    @Synchronized fun add(c:Context,sec:Int):Int {
+        val old=bal(c).toLong()
+        // Régebben az összes nagyobb egyenleget is visszavágta a 4-6 órás
+        // felhasználói limitre, akár egy tét levonásakor is.
+        val ceiling=if(sec>0)maxOf(old,FocusPrefs.maxBalance(c).toLong())
+            else MAX_SAFE_SECONDS.toLong()
+        val n=(old+sec.toLong()).coerceIn(0L,
+            minOf(ceiling,MAX_SAFE_SECONDS.toLong())).toInt()
+        sp(c).edit().putInt("b",n).commit()
+        if(sec>0 || n%15==0)ProgressStore.updateWidget(c)
+        return n
+    }
+
+    /** Gambling-nyeremény és időbank-kivét: nincs 4/6 órás megtakarítási plafon.
+     * Long számításokkal a bet*2 túlcsordulását is elkerüljük.
+     */
+    @Synchronized fun addUncapped(c:Context,seconds:Long):Int {
+        val old=bal(c).toLong()
+        val n=(old+seconds).coerceIn(0L,MAX_SAFE_SECONDS.toLong()).toInt()
+        sp(c).edit().putInt("b",n).commit()
+        ProgressStore.updateWidget(c)
         return n
     }
 }
