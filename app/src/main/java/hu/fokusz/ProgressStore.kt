@@ -54,6 +54,7 @@ object ProgressStore {
         }
         if (type == "STUDY") {
             increment(c, "studying", goal)
+            p.edit().putInt("total_study",p.getInt("total_study",0)+goal).apply()
         }
         if (type == "CHESS") p.edit().putInt("total_chess", p.getInt("total_chess", 0) + 1).apply()
         val newXP = p.getInt("xp", 0) + when (type) {
@@ -75,7 +76,7 @@ object ProgressStore {
         earned(c, reward)
         updateWidget(c)
         // Minden ténylegesen befejezett személyes quest egyszer +5 percet ad a csapatnak.
-        TeamStore.questCompleted(c)
+        CloudTeams.questCompleted(c)
     }
 
     fun xp(c: Context) = sp(c).getInt("xp", 0)
@@ -85,6 +86,7 @@ object ProgressStore {
         val last = try { LocalDate.parse(p.getString("last_completed", "")) } catch (_: Exception) { null }
         return if (last == LocalDate.now() || last == LocalDate.now().minusDays(1)) p.getInt("streak", 0) else 0
     }
+    fun totalStudy(c:Context)=sp(c).getInt("total_study",0)
     fun totalReps(c: Context) = sp(c).getInt("total_reps", 0)
     fun totalChess(c: Context) = sp(c).getInt("total_chess", 0)
     fun totalTasks(c: Context) = sp(c).getInt("total_tasks", 0)
