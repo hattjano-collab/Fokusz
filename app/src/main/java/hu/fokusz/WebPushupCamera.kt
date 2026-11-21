@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -45,16 +46,21 @@ private const val WORKOUT_URL="https://appassets.androidplatform.net/assets/edze
 /** A WebView csak egy „rep” eseményt küldhet az Android reward-rendszerének.
  * Nem kap hozzáférést a Firebase, tárhely vagy egyéb személyes adatok API-jához.
  */
-private class WorkoutRepBridge(private val onRep:()->Unit) {
+private class WorkoutRepBridge(private val onRep: (Int) -> Unit) {
     private val handler=Handler(Looper.getMainLooper())
     private var lastRepAt=0L
-    @JavascriptInterface fun rep() {
+    private var active = true
+
+    @JavascriptInterface @Synchronized fun rep(count: Int) {
         val now=SystemClock.elapsedRealtime()
-        synchronized(this){
-            if(now-lastRepAt<450L)return
-            lastRepAt=now
-        }
-        handler.post {onRep()}
+        if (!active || count <= 0 || now - lastRepAt < 450L) return
+        lastRepAt = now
+        handler.post { onRep(count) }
+    }
+
+    @Synchronized fun close() {
+        active = false
+        handler.removeCallbacksAndMessages(null)
     }
 }
 
@@ -80,8 +86,16 @@ private class WorkoutRepBridge(private val onRep:()->Unit) {
         return
     }
 
-    val bridge=remember(questId){WorkoutRepBridge{latest.value()}}
-    val browser=remember(questId) {
+    val speech = rememberWorkoutSpeech()
+    var voiceEnabled by remember(questId) { mutableStateOf(false) }
+    val speakLatest = rememberUpdatedState(voiceEnabled)
+    val bridge=remember(questId, speech) {
+        WorkoutRepBridge { count ->
+            if (speakLatest.value) speech.speak(count)
+            latest.value()
+        }
+    }
+    val browser=remember(questId, bridge) {
         val loader=WebViewAssetLoader.Builder()
             .addPathHandler("/assets/",WebViewAssetLoader.AssetsPathHandler(context.applicationContext))
             .build()
@@ -120,12 +134,16 @@ private class WorkoutRepBridge(private val onRep:()->Unit) {
     }
     DisposableEffect(browser){
         onDispose{
+            bridge.close()
             browser.stopLoading()
             browser.removeJavascriptInterface("FokuszAndroid")
             browser.destroy()
         }
     }
-    AndroidView(factory={browser},modifier=Modifier.fillMaxWidth().height(715.dp))
-    Text("Fókusz Edző: 120° leengedés, 145° kinyomás, csak egy kar szükséges. A felismert ismétlések a natív questbe is beleszámítanak.",
+    WorkoutSpeechToggle(speech, voiceEnabled) { voiceEnabled = it }
+    key(browser) {
+        AndroidView(factory={browser},modifier=Modifier.fillMaxWidth().height(715.dp))
+    }
+    Text("Fekvőtámaszhoz egy karod látszódjon oldalról. Engedd le magad 120°-ig, majd nyomd ki 145°-ig.",
         color=Color(0xFFA7B4CC))
 }

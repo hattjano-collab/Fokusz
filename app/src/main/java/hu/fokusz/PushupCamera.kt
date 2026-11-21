@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.PointF
 import android.os.SystemClock
-import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -44,10 +44,30 @@ import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import java.util.concurrent.Executors
 import kotlin.math.acos
-import kotlin.math.abs
 import kotlin.math.sqrt
 
-data class PoseFeedback(val message: String, val rep: Boolean = false)
+data class PoseFeedback(val message: String, val rep: Boolean = false, val visible: Boolean = true)
+
+internal fun visibleSide(
+    pose: Pose, left: List<Int>, right: List<Int>, threshold: Float
+): List<PoseLandmark?> = listOf(left, right).map { ids -> ids.map(pose::getPoseLandmark) }
+    .maxWith(compareBy<List<PoseLandmark?>> { side ->
+        side.count { (it?.inFrameLikelihood ?: 0f) >= threshold }
+    }.thenBy { side -> side.sumOf { (it?.inFrameLikelihood ?: 0f).toDouble() } })
+
+internal fun visibilityFeedback(
+    points: List<PoseLandmark?>, labels: List<String>, threshold: Float
+): PoseFeedback? {
+    val (visible, missing) = labels.indices.partition { (points[it]?.inFrameLikelihood ?: 0f) >= threshold }
+    if (missing.isEmpty()) return null
+    fun names(indices: List<Int>): String {
+        val names = indices.map { labels[it] }
+        return if (names.size == 1) names.single() else names.dropLast(1).joinToString(", ") + " és " + names.last()
+    }
+    val message = if (visible.isEmpty()) "Fordulj oldalra. A képen látszódjon ${names(missing)}."
+        else "Látszik ${names(visible)}. Igazíts a kamerán, hogy ${names(missing)} is látszódjon."
+    return PoseFeedback(message, visible = false)
+}
 
 /** A számláló és a webes edzésazonos döntési logikája:
  * váll–könyök–csukló, 120° lent, 145° fent, nem kell teljes test.
@@ -55,6 +75,7 @@ data class PoseFeedback(val message: String, val rep: Boolean = false)
 private class PushupCounter {
     private var stage=0 // 0: indulás, 1: fenti helyzet, 2: lent volt
     private var lastRepAt=0L
+    private var invisibleFrames = 0
     private fun angle(a:PointF,b:PointF,c:PointF):Double {
         val abx=(a.x-b.x).toDouble();val aby=(a.y-b.y).toDouble()
         val cbx=(c.x-b.x).toDouble();val cby=(c.y-b.y).toDouble()
@@ -67,15 +88,12 @@ private class PushupCounter {
             PoseLandmark.LEFT_WRIST)
         val right=listOf(PoseLandmark.RIGHT_SHOULDER,PoseLandmark.RIGHT_ELBOW,
             PoseLandmark.RIGHT_WRIST)
-        fun arm(ids:List<Int>)=ids.map{pose.getPoseLandmark(it)}
-        val a=arm(left);val b=arm(right)
-        fun score(points:List<com.google.mlkit.vision.pose.PoseLandmark?>)=
-            if(points.any{it==null || it.inFrameLikelihood<.38f})0.0
-            else points.sumOf{(it?.inFrameLikelihood?:0f).toDouble()}
-        val usable=if(score(a)>=score(b))a else b
-        if(score(usable)==0.0) {
-            return PoseFeedback("Elég, ha az egyik karod látszik: váll, könyök és csukló.")
+        val usable = visibleSide(pose, left, right, .38f)
+        visibilityFeedback(usable, listOf("a vállad", "a könyököd", "a csuklód"), .38f)?.let {
+            if (++invisibleFrames >= 4) stage = 0
+            return it
         }
+        invisibleFrames = 0
         val shoulder=usable[0]!!.position
         val elbow=usable[1]!!.position
         val wrist=usable[2]!!.position
@@ -112,7 +130,10 @@ private class PushupCounter {
             PackageManager.PERMISSION_GRANTED)
     }
     var front by remember { mutableStateOf(true) }
-    var hint by remember { mutableStateOf("Helyezd a telefont oldalra úgy, hogy az egyik karod látszódjon.") }
+    val alignment = if (mode == "pushups") "A vállad, a könyököd és a csuklód látszik."
+        else "A vállad, a csípőd, a térded és a bokád látszik."
+    var hint by remember(questId, mode, front) { mutableStateOf("Helyezd a telefont oldalra a gyakorlat előtt.") }
+    var cameraReady by remember(questId, mode, front) { mutableStateOf(false) }
     val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         if (!it) hint = "A számláláshoz engedélyezned kell a kamerát."
@@ -121,10 +142,6 @@ private class PushupCounter {
     val onIssueUpdated by rememberUpdatedState(onIssue)
     var lastIssueAt by remember { mutableStateOf(0L) }
     var lastIssueText by remember { mutableStateOf("") }
-    val speaker = remember { TextToSpeech(context) { } }
-    var spokenAt by remember { mutableStateOf(0L) }
-    DisposableEffect(speaker) { onDispose { speaker.shutdown() } }
-
     if (!granted) {
         Text("A kamerakép helyben kerül elemzésre, nem készül róla felvétel.",
             color = Color(0xFFA7B4CC))
@@ -134,7 +151,10 @@ private class PushupCounter {
         return
     }
 
-    val previewView = remember(front) {
+    var voiceEnabled by remember(questId, mode) { mutableStateOf(false) }
+    var sessionCount by remember(questId, mode) { mutableIntStateOf(0) }
+    val speech = rememberWorkoutSpeech()
+    val previewView = remember(context) {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
     }
     val counter = remember(questId, front) { PushupCounter() }
@@ -147,13 +167,16 @@ private class PushupCounter {
             Text(if (front) "Hátsó kamera" else "Elülső kamera")
         }
     }
+    WorkoutSpeechToggle(speech, voiceEnabled) { voiceEnabled = it }
+    if (cameraReady) Text(alignment, color = Color(0xFF7BE7C1))
     Text(hint, color = Color(0xFF7BE7C1))
-    Text(if(mode=="pushups")"Elég a vállad, könyököd és csuklód. Lent 120°, fent 145°. Hangos visszajelzéssel." else "Oldalnézetből látszódjon a teljes tested. Mód: "+mode+". Hangos visszajelzéssel.",
+    Text(if (mode == "pushups") "Az egyik karod látszódjon oldalról. A leengedés 120°-ig, a kinyomás 145°-ig számít."
+        else "Fordulj oldalra, hogy a kamera lássa a vállad, a csípőd, a térded és a bokád.",
         color = Color(0xFFA7B4CC))
     Text("A felismerés csak becslés: a fényviszonyok és a kamera szöge befolyásolhatják.",
         color = Color(0xFFA7B4CC))
 
-    DisposableEffect(questId, front, owner) {
+    DisposableEffect(questId, front, mode, owner) {
         val executor = Executors.newSingleThreadExecutor()
         val detector = PoseDetection.getClient(PoseDetectorOptions.Builder()
             .setDetectorMode(PoseDetectorOptions.STREAM_MODE).build())
@@ -180,8 +203,13 @@ private class PushupCounter {
                                     .addOnSuccessListener(ContextCompat.getMainExecutor(context)) { pose ->
                                         if (!disposed) {
                                             val f = if (mode == "pushups") counter.analyze(pose) else exerciseCounter.analyze(pose)
+                                            cameraReady = f.visible
                                             hint = f.message
-                                            if (f.rep) onRepUpdated()
+                                            if (f.rep) {
+                                                sessionCount++
+                                                if (voiceEnabled) speech.speak(sessionCount)
+                                                onRepUpdated()
+                                            }
                                             val nowFeedback=SystemClock.elapsedRealtime()
                                             val invalid=f.message.contains("egyenes",true) ||
                                                 f.message.contains("mélység",true) ||
@@ -193,18 +221,13 @@ private class PushupCounter {
                                                 lastIssueText=f.message
                                                 onIssueUpdated?.invoke(f.message)
                                             }
-                                            val now=SystemClock.elapsedRealtime()
-                                            if (now-spokenAt>4000L || (f.rep && now-spokenAt>700L)) {
-                                                if (f.rep || f.message.contains("egyenes") || f.message.contains("térded")) {
-                                                    spokenAt=now
-                                                    speaker.speak(if (f.rep) "Jó! Plusz egy." else f.message,
-                                                        TextToSpeech.QUEUE_FLUSH,null,"fokusz_coach")
-                                                }
-                                            }
                                         }
                                     }
                                     .addOnFailureListener(ContextCompat.getMainExecutor(context)) {
-                                        if (!disposed) hint = "Nem sikerült felismerni a pózt."
+                                        if (!disposed) {
+                                            cameraReady = false
+                                            hint = "Nem sikerült felismerni a pózt."
+                                        }
                                     }
                                     .addOnCompleteListener { frame.close() }
                             } catch (_: Exception) { frame.close() }

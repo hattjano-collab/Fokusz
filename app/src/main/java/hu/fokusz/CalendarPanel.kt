@@ -59,6 +59,7 @@ import java.util.Locale
     val events=remember(selected,refresh,permission) {
         CalendarStore.events(ctx,selected,selected)
     }
+    val completions = remember(ctx, selected) { ProgressStore.completions(ctx, selected) }
     val week=remember(refresh,permission) { CalendarStore.upcoming(ctx) }
     val monday=selected.minusDays((selected.dayOfWeek.value-1).toLong())
     val weekEvents=remember(selected,refresh,permission) {
@@ -158,6 +159,24 @@ import java.util.Locale
                             Text("×",color=Color(0xFFFFC78D))
                         }
                 }
+            }
+        }
+        FeatureBox("✓ TELJESÍTETT FELADATOK – KIJELÖLT NAP") {
+            val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
+            if (completions.activities.isEmpty() && completions.earlierCount == 0) {
+                Text("Nincs teljesített feladat ezen a napon.", color = Color(0xFFA7B4CC))
+            }
+            completions.activities.forEach { activity ->
+                Column {
+                    Text("✓ ${activity.title}", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    val time = activity.time.format(timeFormat)
+                    val detail = if (activity.reward > 0) "$time · +${duration(activity.reward)}" else time
+                    Text(detail, color = Color(0xFFA7B4CC), fontSize = 11.sp)
+                }
+            }
+            if (completions.earlierCount > 0) {
+                Text("${completions.earlierCount} korábbi teljesítés név nélkül.",
+                    color = Color(0xFFA7B4CC), fontSize = 12.sp)
             }
         }
         FeatureBox("➕ ESEMÉNY HOZZÁADÁSA") {

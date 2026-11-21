@@ -1,6 +1,7 @@
 package hu.fokusz
 
 import android.app.AppOpsManager
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -39,6 +40,8 @@ object UsageGuard {
 }
 
 class FocusService : Service() {
+    private enum class CoverReason { QUEST, BALANCE, BREAK, APP_LIMIT }
+
     companion object {
         @Volatile var isRunning = false
         private const val CHANNEL = "fokusz-monitor"
@@ -47,7 +50,8 @@ class FocusService : Service() {
     private var lastEventTime = 0L
     private var currentPackage = ""
     private var cover: View? = null
-    private var coverQuestMode = false
+    private var coverReason: CoverReason? = null
+    private var coverDescription: TextView? = null
     private var windowManager: WindowManager? = null
     private val background=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private var lastNotification=0L
@@ -66,8 +70,6 @@ class FocusService : Service() {
         super.onCreate()
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Fókusz figyelés", NotificationManager.IMPORTANCE_LOW))
-        val intent = Intent(this, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         startForeground(2,liveNotification())
         isRunning = true
         CloudTeams.start(this)
@@ -123,7 +125,7 @@ class FocusService : Service() {
             background.launch {
                 val result=ChessVerifier.dailyProgress(this@FocusService)
                 if(result.success)
-                    QuestStore.verifiedChess(this@FocusService,result.count)
+                    QuestStore.verifiedChess(this@FocusService,result)
             }
         }
         if(DuolingoStore.linked(this) && !DuolingoStore.rewardedToday(this)
@@ -132,61 +134,85 @@ class FocusService : Service() {
             background.launch { DuolingoStore.check(this@FocusService) }
         }
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (!pm.isInteractive) { hideCover(); return }
+        if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            hideCover()
+            return
+        }
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
         val events = us.queryEvents(now - 30_000L, now) ?: return
         val ev = UsageEvents.Event()
-        var recentTime = lastEventTime
+        val previouslySeen = lastEventTime
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
-            if (ev.eventType == UsageEvents.Event.ACTIVITY_RESUMED && ev.timeStamp > recentTime) {
-                recentTime = ev.timeStamp
-                currentPackage = ev.packageName ?: ""
+            if (ev.timeStamp <= previouslySeen) continue
+            when (ev.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED -> currentPackage = ev.packageName.orEmpty()
+                UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.ACTIVITY_STOPPED -> {
+                    if (currentPackage == ev.packageName) currentPackage = ""
+                }
+                else -> continue
             }
+            lastEventTime = ev.timeStamp
         }
-        lastEventTime = recentTime
         val questLocked = QuestStore.isTimerLocked(this)
         val focusLocked = FocusPrefs.focusLocked(this)
         val locked = questLocked || focusLocked
         val browsersLocked = (QuestStore.isCustomTimerLocked(this) || focusLocked) &&
             currentPackage in Store.BROWSERS
-        val isSocial = FocusPrefs.blocked(this, currentPackage)
+        val trackedSocial = FocusPrefs.blocked(this, currentPackage)
+        val isSocial = trackedSocial
             || (locked && (currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL))
         val focusUnapproved = focusLocked && !FocusPrefs.allowedDuringFocus(this,currentPackage)
-        if (isSocial || browsersLocked || focusUnapproved) {
-            if (FocusPrefs.emergencyActive(this) && !QuestStore.isCustomTimerLocked(this) && !focusLocked) {
-                if (Store.bal(this) > 0) Store.add(this, -1)
-                ProgressStore.used(this, 1)
-                hideCover()
-            } else if (locked) {
-                showCover(true)
-            } else if (FocusPrefs.blocked(this, currentPackage)) {
-                val personal=Store.bal(this)
-                val spent=if(personal>0) {
-                    Store.add(this,-1)
-                    true
-                } else {
-                    CloudTeams.spendSecond(this)
-                }
-                if(spent) {
-                    ProgressStore.used(this,1)
-                    hideCover()
-                } else {
-                    showCover(false)
-                }
-            } else {
-                hideCover()
-            }
-        } else hideCover()
+        if (!isSocial && !browsersLocked && !focusUnapproved) {
+            hideCover()
+            return
+        }
+
+        val emergency = FocusPrefs.emergencyActive(this)
+        if (locked && !emergency) {
+            showCover(CoverReason.QUEST)
+            return
+        }
+        if (trackedSocial && SocialUsage.dailyLimitReached(this, currentPackage)) {
+            showCover(CoverReason.APP_LIMIT)
+            return
+        }
+        val breakLeft = if (trackedSocial) SocialUsage.breakSecondsLeft(this) else 0
+        if (breakLeft > 0) {
+            showBreak(breakLeft)
+            return
+        }
+
+        val spendReason = ScreenTimeLedger.socialReason(currentPackage)
+        val spentPersonal = Store.spend(this, 1, spendReason)
+        val spentTeam = !emergency && !spentPersonal && CloudTeams.spendSecond(this)
+        if (!emergency && !spentPersonal && !spentTeam) {
+            showCover(CoverReason.BALANCE)
+            return
+        }
+        if (spentTeam) ScreenTimeLedger.record(this, "$spendReason · csapatkeret", -1)
+        ProgressStore.used(this, 1)
+        val newBreak = if (trackedSocial) {
+            SocialUsage.recordSecond(this, currentPackage, advanceBreak = spentPersonal || spentTeam)
+        } else 0
+        if (newBreak > 0) showBreak(newBreak) else hideCover()
     }
 
-    private fun showCover(questMode: Boolean) {
+    private fun showBreak(seconds: Int) = showCover(
+        CoverReason.BREAK,
+        "10 perc közösségi média után tarts egy rövid szünetet.\nFolytathatod $seconds másodperc múlva."
+    )
+
+    private fun showCover(reason: CoverReason, countdown: String? = null) {
         if (cover != null) {
-            if (coverQuestMode == questMode) return
+            if (coverReason == reason) {
+                if (countdown != null) coverDescription?.text = countdown
+                return
+            }
             hideCover()
         }
-        coverQuestMode = questMode
+        coverReason = reason
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -195,14 +221,23 @@ class FocusService : Service() {
             setBackgroundColor(Color.rgb(16, 22, 38))
         }
         val title = TextView(this).apply {
-            text = if (questMode) "🔒 Fókusz\nQuest folyamatban!" else "🔒 Fókusz\nElfogyott a mai időkereted"
+            text = when (reason) {
+                CoverReason.QUEST -> "🔒 Fókusz\nQuest folyamatban!"
+                CoverReason.BALANCE -> "🔒 Fókusz\nElfogyott a mai időkereted"
+                CoverReason.BREAK -> "Fókusz\nKötelező szünet"
+                CoverReason.APP_LIMIT -> "🔒 Fókusz\nElérted az app napi keretét"
+            }
             textSize = 26f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
         }
         val desc = TextView(this).apply {
-            text = if (questMode) "A küldetés időzítője alatt a közösségi appok zárolva vannak. Térj vissza a feladatodhoz!"
-                else "A Fókusz alkalmazásban további perceket szerezhetsz."
+            text = when (reason) {
+                CoverReason.QUEST -> "A küldetés időzítője alatt a közösségi appok zárolva vannak. Térj vissza a feladatodhoz!"
+                CoverReason.BALANCE -> "A Fókusz alkalmazásban további perceket szerezhetsz."
+                CoverReason.BREAK -> countdown.orEmpty()
+                CoverReason.APP_LIMIT -> "A többi kiválasztott apphoz továbbra is használhatod a maradék idődet."
+            }
             textSize = 17f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -226,13 +261,15 @@ class FocusService : Service() {
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.CENTER
-        try { wm.addView(panel, params); cover = panel; windowManager = wm }
+        try { wm.addView(panel, params); cover = panel; coverDescription = desc; windowManager = wm }
         catch (_: Exception) { cover = null }
     }
 
     private fun hideCover() {
         val view = cover ?: return
         cover = null
+        coverDescription = null
+        coverReason = null
         try { windowManager?.removeView(view) } catch (_: Exception) { }
     }
 

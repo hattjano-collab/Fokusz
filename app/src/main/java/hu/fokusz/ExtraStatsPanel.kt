@@ -150,8 +150,8 @@ private val SUB=Color(0xFFA7B4CC)
                 fontWeight=FontWeight.Bold)
             Text("Jutalom minden újonnan ellenőrzött sakkjátszmáért: győzelem +1 perc, vereség +30 másodperc, döntetlen +45 másodperc.",
                 color=SUB,fontSize=12.sp)
-            Text("Sakkfiók: "+(if(ChessVerifier.isLinked(c))
-                ChessVerifier.username(c) else "Nincs összekötve"),color=SUB)
+            val accounts = ChessVerifier.accounts(c).joinToString(" · ") { it.label }
+            Text(accounts.ifEmpty { "Nincs összekötött sakkfiók." }, color = SUB)
         }
         FeatureBox("📉 BECSÜLT MEGTAKARÍTOTT IDŐ") {
             Text(duration(estimate),color=GREEN,fontSize=28.sp,fontWeight=FontWeight.ExtraBold)

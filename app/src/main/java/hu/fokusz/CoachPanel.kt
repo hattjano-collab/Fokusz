@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.sp
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("AI-MOZGÁSEDZŐ", color = Color(0xFFF5F7FF), fontSize = 24.sp,
             fontWeight = FontWeight.Black)
-        Text("Fekvőtámasznál elég az egyik kar: 120° lent, 145° fent. A többi gyakorlat megtartja a natív kamerát.",
+        Text("Fekvőtámasznál elég az egyik kar. Engedd le magad 120°-ig, majd nyomd ki 145°-ig.",
             color = Color(0xFFA7B4CC), fontSize = 13.sp)
         modes.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -54,8 +54,8 @@ import androidx.compose.ui.unit.sp
         }
         Text(if (mode == "plank") "Kitartott másodpercek: $count" else "Szabályosnak érzékelt ismétlések: $count",
             color = Color(0xFF7BE7C1), fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("Minden " + CoachRewards.target(mode) + " " + CoachRewards.name(mode) +
-                " után +2 perc (fókuszmódban fekvő/guggolás/plank: +4 perc) jár. Az egyenlegplafon érvényes.",
+        val unit = if (mode == "plank") "minden kitartott másodpercért" else "minden elfogadott ismétlésért"
+        Text("+${CoachRewards.secondsPerRep(ctx, mode)} mp $unit az egyenlegplafonig.",
             color=Color(0xFFFFC78D),fontSize=14.sp,fontWeight=FontWeight.Bold)
         if (rewardNote.isNotBlank()) Text(rewardNote,color=Color(0xFF7BE7C1),
             fontWeight=FontWeight.Bold)
@@ -75,10 +75,8 @@ import androidx.compose.ui.unit.sp
             val recognized:()->Unit={
                 val result=CoachRewards.recognized(ctx,mode)
                 count=result.count
-                if(result.count % CoachRewards.target(mode)==0) {
-                    rewardNote=if(result.awarded>0) "✦ +"+duration(result.awarded)+" képernyőidő!"
-                        else "A jutalom most nem növelte a személyes egyenleget."
-                }
+                rewardNote = if (result.awarded > 0) "✦ +${result.awarded} mp képernyőidő!"
+                    else "Elérted a képernyőidő-egyenleg plafonját."
             }
             if(mode=="pushups") {
                 WebPushupCamera(questId=-1000,onRep=recognized)

@@ -103,9 +103,7 @@ object DuolingoStore {
         if(s.getString("rewardDay","")==day)return 0
         // A dátumot előbb mentjük, így két párhuzamos hálózati válasz sem dupláz.
         s.edit().putString("rewardDay",day).commit()
-        val before=Store.bal(c)
-        Store.add(c,180)
-        val paid=(Store.bal(c)-before).coerceAtLeast(0)
+        val paid = Store.addStudyReward(c, 180, "Duolingo-jutalom")
         ProgressStore.earned(c,paid)
         return paid
     }

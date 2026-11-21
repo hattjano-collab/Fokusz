@@ -1,12 +1,15 @@
 package hu.fokusz
 
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.format.DateTimeParseException
 
 /** Helyben tárolt motivációs adatok; sem fiók, sem szerver nem szükséges. */
 object ProgressStore {
@@ -14,7 +17,30 @@ object ProgressStore {
     private fun day(c: Context, date: LocalDate = LocalDate.now()) =
         c.getSharedPreferences("fokusz_day_" + date.toString(), Context.MODE_PRIVATE)
 
+    private const val COMPLETIONS = "completed_activities"
+
     data class Daily(val date: LocalDate, val usage: Int, val earned: Int, val tasks: Int, val exercises: Int, val studying: Int)
+    data class Completion(val title: String, val time: LocalTime, val reward: Int)
+    data class CompletionHistory(val activities: List<Completion>, val earlierCount: Int)
+
+    private fun completionRecords(stats: SharedPreferences): JSONArray =
+        try { JSONArray(stats.getString(COMPLETIONS, "[]") ?: "[]") }
+        catch (_: org.json.JSONException) { JSONArray() }
+
+    @Synchronized fun completions(c: Context, date: LocalDate): CompletionHistory {
+        val stats = day(c, date)
+        val records = completionRecords(stats)
+        val activities = (0 until records.length()).mapNotNull { index ->
+            val entry = records.optJSONObject(index) ?: return@mapNotNull null
+            val title = entry.optString("title").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val time = try { LocalTime.parse(entry.optString("time")) }
+            catch (_: DateTimeParseException) { return@mapNotNull null }
+            Completion(title, time, entry.optInt("reward").coerceAtLeast(0))
+        }
+        return CompletionHistory(activities.asReversed(),
+            (stats.getInt("tasks", 0) - activities.size).coerceAtLeast(0))
+    }
+
     @Synchronized fun recent(c: Context, count: Int = 7): List<Daily> =
         (count - 1 downTo 0).map { offset ->
             val date = LocalDate.now().minusDays(offset.toLong())
@@ -36,6 +62,17 @@ object ProgressStore {
         if (seconds > 0) increment(c, "earned", seconds)
     }
 
+    @Synchronized fun chessEarned(c: Context, date: LocalDate, gameId: String, seconds: Int) {
+        if (seconds <= 0) return
+        val prefs = day(c, date)
+        val key = "chess_earned_$gameId"
+        if (prefs.contains(key)) return
+        check(prefs.edit().putBoolean(key, true)
+            .putInt("earned", prefs.getInt("earned", 0) + seconds).commit()) {
+            "A sakkjutalom statisztikáját nem sikerült menteni."
+        }
+    }
+
     @Synchronized fun coachReps(c: Context, count: Int, mode: String = "pushups") {
         if(count<=0) return
         increment(c,"reps",count)
@@ -44,18 +81,33 @@ object ProgressStore {
         p.edit().putInt("total_reps",p.getInt("total_reps",0)+count).apply()
     }
 
-    @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int) {
+    @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int, title: String? = null) {
+        val completedAt = LocalDateTime.now()
+        val date = completedAt.toLocalDate()
+        val stats = day(c, date)
         val p = sp(c)
-        increment(c, "tasks", 1)
+        val activityTitle = title ?: when (type) {
+            "STUDY" -> "Fókuszmód"
+            "LANGUAGE" -> "Xeropan nyelvgyakorlás"
+            else -> "Teljesített feladat"
+        }
+        val records = completionRecords(stats).put(JSONObject()
+            .put("title", activityTitle)
+            .put("time", completedAt.toLocalTime().toString())
+            .put("reward", reward.coerceAtLeast(0)))
+        val dailyUpdate = stats.edit().putInt("tasks", stats.getInt("tasks", 0) + 1)
+            .putString(COMPLETIONS, records.toString())
         if (type == "PUSHUPS") {
-            increment(c, "reps", goal)
-            increment(c, "pushups", goal)
+            dailyUpdate.putInt("reps", stats.getInt("reps", 0) + goal)
+                .putInt("pushups", stats.getInt("pushups", 0) + goal)
             p.edit().putInt("total_reps", p.getInt("total_reps", 0) + goal).apply()
         }
         if (type == "STUDY") {
-            increment(c, "studying", goal)
+            dailyUpdate.putInt("studying", stats.getInt("studying", 0) + goal)
             p.edit().putInt("total_study",p.getInt("total_study",0)+goal).apply()
         }
+        if (reward > 0) dailyUpdate.putInt("earned", stats.getInt("earned", 0) + reward)
+        dailyUpdate.apply()
         if (type == "CHESS") p.edit().putInt("total_chess", p.getInt("total_chess", 0) + 1).apply()
         val newXP = p.getInt("xp", 0) + when (type) {
             "PUSHUPS" -> 50
@@ -63,17 +115,16 @@ object ProgressStore {
             "STUDY" -> 35
             else -> 25
         }
-        val today = LocalDate.now().toString()
+        val today = date.toString()
         val last = p.getString("last_completed", "")
         val lastDate = try { LocalDate.parse(last) } catch (_: Exception) { null }
         val streak = if (last == today) p.getInt("streak", 0)
-            else if (lastDate == LocalDate.now().minusDays(1)) p.getInt("streak", 0) + 1
+            else if (lastDate == date.minusDays(1)) p.getInt("streak", 0) + 1
             else 1
         p.edit().putInt("xp", newXP).putInt("streak", streak)
             .putString("last_completed", today)
             .putInt("total_tasks", p.getInt("total_tasks", 0) + 1)
             .apply()
-        earned(c, reward)
         updateWidget(c)
         // Minden ténylegesen befejezett személyes quest egyszer +5 percet ad a csapatnak.
         CloudTeams.questCompleted(c)
@@ -120,8 +171,8 @@ object ProgressStore {
         val key = now.get(java.time.temporal.WeekFields.ISO.weekBasedYear()).toString() + "-" +
             now.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
         p.edit().putString("weeklyClaim", key).apply()
-        Store.add(c, 600)
-        earned(c, 600)
+        val credited = Store.credit(c, 600, "Heti questbónusz")
+        earned(c, credited)
         return true
     }
     fun updateWidget(c: Context) {

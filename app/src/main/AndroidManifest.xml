@@ -25,8 +25,12 @@
     <queries>
         <package android:name="com.duolingo"/>
         <package android:name="com.application.xeropan"/>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
-    <application android:label="Fókusz" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+    <application android:label="Fókusz" android:icon="@mipmap/fokusz_launcher"
+        android:roundIcon="@mipmap/fokusz_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
