@@ -13,6 +13,7 @@ class ExerciseCounter(private val mode: String) {
     private var stage = 0
     private var stable = 0
     private var plankSince = 0L
+    private var invisibleFrames = 0
     private fun angle(a: PointF, b: PointF, c: PointF): Double {
         val ax = (a.x-b.x).toDouble(); val ay = (a.y-b.y).toDouble()
         val cx = (c.x-b.x).toDouble(); val cy = (c.y-b.y).toDouble()
@@ -24,14 +25,14 @@ class ExerciseCounter(private val mode: String) {
             PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE)
         val right = listOf(PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_HIP,
             PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE)
-        fun limbs(ids: List<Int>) = ids.map { pose.getPoseLandmark(it) }
-        val a = limbs(left); val b = limbs(right)
-        val selected = if (a.sumOf { (it?.inFrameLikelihood ?: 0f).toDouble() } >
-            b.sumOf { (it?.inFrameLikelihood ?: 0f).toDouble() }) a else b
-        if (selected.any { it == null || it.inFrameLikelihood<.60f }) {
-            stable = 0;plankSince = 0
-            return PoseFeedback("Oldalról látszódjon váll, csípő, térd, boka!")
+        val selected = visibleSide(pose, left, right, .60f)
+        visibilityFeedback(selected, listOf("a vállad", "a csípőd", "a térded", "a bokád"), .60f)?.let {
+            if (++invisibleFrames >= 4) stage = 0
+            stable = 0
+            plankSince = 0
+            return it
         }
+        invisibleFrames = 0
         val shoulder=selected[0]!!.position;val hip=selected[1]!!.position
         val knee=selected[2]!!.position;val ankle=selected[3]!!.position
         if (mode=="plank") {

@@ -72,13 +72,12 @@ object TimeBank {
     @Synchronized fun remainingDaily(c:Context):Int = MAX_DAILY_DEPOSIT
     @Synchronized fun deposit(c:Context,seconds:Int):Boolean {
         settle(c)
-        if(seconds<=0 || Store.bal(c)<seconds ||
-            ready(c).toLong()+waiting(c).toLong()+seconds>MAX_TOTAL.toLong())return false
         val s=sp(c)
-        val debited=Store.bal(c)-Store.addUncapped(c,-seconds.toLong())
-        if(debited!=seconds)return false
-        s.edit().putInt("pending",(waiting(c).toLong()+seconds).toInt())
-            .putString("pendingDay",LocalDate.now().toString())
+        val pending=s.getInt("pending",0)
+        if(seconds<=0 || s.getInt("ready",0).toLong()+pending+seconds>MAX_TOTAL.toLong())return false
+        if(!Store.spend(c,seconds,"Befizetés az időbankba"))return false
+        s.edit().putInt("pending",pending+seconds)
+            .putString("pendingDay",s.getString("lastSettledDate",""))
             .putInt("depositedToday",
                 (s.getInt("depositedToday",0).toLong()+seconds)
                     .coerceAtMost(MAX_TOTAL.toLong()).toInt()).commit()
@@ -86,12 +85,13 @@ object TimeBank {
     }
     @Synchronized fun withdraw(c:Context,seconds:Int):Boolean {
         settle(c)
-        if(seconds<=0 || ready(c)<seconds ||
-            Store.bal(c).toLong()+seconds>Store.MAX_SAFE_SECONDS.toLong())return false
         val s=sp(c)
-        s.edit().putInt("ready",ready(c)-seconds).commit()
-        Store.addUncapped(c,seconds.toLong())
-        return true
+        val available=s.getInt("ready",0)
+        if(seconds<=0 || available<seconds)return false
+        if(!s.edit().putInt("ready",available-seconds).commit())return false
+        if(Store.creditUncappedExact(c,seconds,"Kivét az időbankból"))return true
+        s.edit().putInt("ready",available).commit()
+        return false
     }
 }
 
@@ -112,9 +112,8 @@ object BossQuest {
     @Synchronized fun claim(c:Context):Boolean {
         if(!ready(c))return false
         sp(c).edit().putString("claimed",weekKey()).commit()
-        val before=Store.bal(c)
-        Store.add(c,900)
-        ProgressStore.earned(c,(Store.bal(c)-before).coerceAtLeast(0))
+        val credited = Store.credit(c, 900, "Heti főkihívás jutalma")
+        ProgressStore.earned(c, credited)
         return true
     }
     fun claimed(c:Context):Boolean=sp(c).getString("claimed","")==weekKey()

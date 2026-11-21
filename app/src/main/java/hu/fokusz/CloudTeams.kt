@@ -454,8 +454,8 @@ object CloudTeams {
                 .put("bank",toBank)
                 .put("teamId",teamId(c))
             // A küldésre lefoglalt pénz nem költhető el közben.
-            val debited=current-Store.addUncapped(c,-seconds.toLong())
-            if(debited!=seconds)return@withContext "Nem sikerült lefoglalni az időt."
+            val reason = if (toBank) "Befizetés a csapatbankba" else "Befizetés a közös keretbe"
+            if (!Store.spend(c, seconds, reason)) return@withContext "Nem sikerült lefoglalni az időt."
             p.edit().putString("contribution",operation.toString()).commit()
             val done=flushContribution(c)
             if(done) "✓ "+duration(seconds)+" a csapat "+

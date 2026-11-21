@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -26,6 +27,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -253,8 +257,9 @@ private val C = Color(0xFF273750)
 @Composable fun OptionsPanel() {
     val ctx = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
-    val currentTheme = FocusPrefs.theme(ctx)
-    val maxTime = FocusPrefs.maxBalance(ctx)
+    var limitApp by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val currentTheme = remember(refresh) { FocusPrefs.theme(ctx) }
+    val maxTime = remember(refresh) { FocusPrefs.maxBalance(ctx) }
     val level = ProgressStore.level(ctx)
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("BEÁLLÍTÁSOK", color = W, fontSize = 23.sp, fontWeight = FontWeight.Black)
@@ -265,12 +270,17 @@ private val C = Color(0xFF273750)
             ChessAccountPanel()
         }
         FeatureCard("🔒 SAJÁT BLOKKLISTA") {
-            Text("Válaszd ki, mely appok fogyasszák a napi időkeretet. A questek és a mélyfókusz idején további appok is blokkoltak lehetnek.",
+            Text("Válaszd ki az időkeretből használható appokat. Tíz perc használat után 20 másodperc szünet következik, az appváltás is beleszámít.",
                 color = M, fontSize = 12.sp)
             FocusPrefs.socialChoices.forEach { (label,pkg) ->
+                val enabled = FocusPrefs.blocked(ctx, pkg)
+                val limit = SocialUsage.dailyLimitMinutes(ctx, pkg)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(label, modifier = Modifier.weight(1f), color = W)
-                    Switch(checked = FocusPrefs.blocked(ctx, pkg),
+                    TextButton(onClick = { limitApp = label to pkg }, enabled = enabled) {
+                        Text(if (limit > 0) "$limit perc" else "Napi keret")
+                    }
+                    Switch(checked = enabled,
                         onCheckedChange = { FocusPrefs.setBlocked(ctx, pkg, it);refresh++ })
                 }
             }
@@ -336,5 +346,36 @@ private val C = Color(0xFF273750)
             Text("A Fókusz saját fejlesztésű app, nem rendszerkomponens. A tiltás nem megkerülhetetlen.",
                 color = M)
         }
+    }
+    limitApp?.let { (label, pkg) ->
+        var minutes by remember(pkg) {
+            mutableStateOf(SocialUsage.dailyLimitMinutes(ctx, pkg).toString())
+        }
+        val value = minutes.toIntOrNull()
+        AlertDialog(
+            onDismissRequest = { limitApp = null },
+            title = { Text("$label napi kerete") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Mai használat: ${clock(SocialUsage.dailySeconds(ctx, pkg))}. A 0 kikapcsolja a külön keretet.")
+                    OutlinedTextField(
+                        value = minutes,
+                        onValueChange = { minutes = it.filter(Char::isDigit).take(4) },
+                        label = { Text("Perc naponta (0–1440)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = minutes.isNotEmpty() && (value == null || value !in 0..1440)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = value != null && value in 0..1440, onClick = {
+                    SocialUsage.setDailyLimit(ctx, pkg, value ?: return@TextButton)
+                    limitApp = null
+                    refresh++
+                }) { Text("Mentés") }
+            },
+            dismissButton = { TextButton(onClick = { limitApp = null }) { Text("Mégse") } }
+        )
     }
 }

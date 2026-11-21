@@ -45,7 +45,8 @@ object FocusPrefs {
     private val standard = Store.BLOCKED + setOf("com.ss.android.ugc.trill")
     fun blocked(c: Context, pkg: String): Boolean {
         val p = sp(c)
-        return p.getBoolean("blocked_" + pkg, pkg in standard)
+        val canonical = SocialUsage.appKey(pkg)
+        return p.getBoolean("blocked_$canonical", p.getBoolean("blocked_$pkg", pkg in standard))
     }
     fun setBlocked(c: Context, pkg: String, enabled: Boolean) {
         sp(c).edit().putBoolean("blocked_" + pkg, enabled).apply()
@@ -127,9 +128,8 @@ object FocusPrefs {
     @Synchronized fun claimFocus(c: Context): Boolean {
         if (focusPhase(c) != 1 || focusLeft(c) > 0) return false
         focus(c).edit().putInt("phase", 2).commit()
-        val reward = focusTarget(c) / 2
-        Store.add(c, reward)
-        ProgressStore.taskFinished(c, "STUDY", focusTarget(c), reward)
+        val credited = Store.addStudyReward(c, focusTarget(c) / 2, "Fókuszidő jutalma")
+        ProgressStore.taskFinished(c, "STUDY", focusTarget(c), credited)
         return true
     }
     @Synchronized fun clearFocus(c: Context) {
