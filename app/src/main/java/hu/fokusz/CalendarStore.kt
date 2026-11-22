@@ -13,7 +13,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class FocusEvent(val id: Long, val title: String, val time: LocalDateTime, val minutes: Int, val source: String, val weekly:Boolean=false)
+data class FocusEvent(val id: Long, val title: String, val time: LocalDateTime, val minutes: Int,
+    val source: String, val weekly: Boolean = false, val allDay: Boolean = false)
 
 object CalendarStore {
     private fun sp(c: Context) = c.getSharedPreferences("fokusz_calendar_v1",0)
@@ -104,20 +105,25 @@ object CalendarStore {
                 }
             }
         }
-        return (local+deviceEvents(c,start,end)).sortedBy{it.time}
+        val exams = QuizStore.exams(c).filter { it.date in start..end }.map { exam ->
+            FocusEvent(exam.id.hashCode().toLong(), "Dolgozat: ${exam.subject}", exam.date.atStartOfDay(),
+                0, "Kvíz", allDay = true)
+        }
+        return (local + exams + deviceEvents(c,start,end)).sortedBy { it.time }
     }
 
     fun upcoming(c:Context):List<FocusEvent> {
         val now=LocalDateTime.now()
-        return events(c,LocalDate.now(),LocalDate.now().plusDays(7))
-            .filter { it.time.isAfter(now.minusMinutes(1)) }.take(8)
+        val today = now.toLocalDate()
+        return events(c,today,today.plusDays(7))
+            .filter { it.allDay || it.time.isAfter(now.minusMinutes(1)) }.take(8)
     }
     fun nextEventMinutes(c:Context):Long? {
-        val n=upcoming(c).firstOrNull() ?:return null
+        val n=upcoming(c).firstOrNull { !it.allDay } ?:return null
         return java.time.Duration.between(LocalDateTime.now(),n.time).toMinutes().coerceAtLeast(0)
     }
     fun reminderText(c:Context):String? {
-        val e=upcoming(c).firstOrNull() ?:return null
+        val e=upcoming(c).firstOrNull { !it.allDay } ?:return null
         val mins=java.time.Duration.between(LocalDateTime.now(),e.time).toMinutes()
         return if(mins in 0..15) "Naptár: "+e.title.take(28)+" • "+mins+" perc múlva" else null
     }

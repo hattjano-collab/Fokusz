@@ -25,6 +25,7 @@ object GambleStats {
         amount > 0 && amount <= Store.bal(c)
     @Synchronized fun reserve(c:Context,amount:Int):Boolean {
         if(!canBet(c,amount))return false
+        today(c)
         val s=sp(c)
         s.edit().putInt("staked",(s.getInt("staked",0).toLong()+amount)
             .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).commit()

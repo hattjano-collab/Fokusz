@@ -2,14 +2,20 @@ package hu.fokusz
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Base64
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Transaction
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,8 +42,28 @@ data class CloudTeamView(
     val members:List<CloudMember> = emptyList(),
     val push:Int=0,val chess:Int=0,val study:Int=0,
     val targetPush:Int=100,val targetChess:Int=10,val targetStudy:Int=10800,
-    val bossClaimed:Date?=null,val syncedAt:Long=0L,val cached:Boolean=true
+    val bossClaimed:Date?=null,val syncedAt:Long=0L,val cached:Boolean=true,
+    val lastBankEvent: String = ""
 )
+
+enum class CloudBossActivity(val key: String, val label: String, val goalPerMember: Int) {
+    PUSH("push", "Fekvőtámasz", 100), CHESS("chess", "Sakkparti", 10), STUDY("study", "Tanulás", 10800);
+
+    fun count(member: CloudMember): Int = when (this) {
+        PUSH -> member.push
+        CHESS -> member.chess
+        STUDY -> member.study
+    }
+
+    fun display(secondsOrCount: Int): String =
+        if (this == STUDY) duration(secondsOrCount) else secondsOrCount.toString()
+}
+
+data class CloudBossTask(val uid: String, val activity: CloudBossActivity, val baseline: Int,
+                         val target: Int, val round: Date)
+
+data class CloudBossTaskView(val teamId: String = "", val tasks: List<CloudBossTask> = emptyList(),
+                             val available: Boolean? = null)
 
 /** Internetes csapatok: Firebase Anonymous Auth + Cloud Firestore, Spark csomagon.
  * A közös egyenleget kizárólag Firestore-tranzakcióval módosítjuk.
@@ -53,14 +79,20 @@ object CloudTeams {
     private val starting=AtomicBoolean(false)
     private val leasing=AtomicBoolean(false)
     private var listener:ListenerRegistration?=null
+    private var bossTaskListener: ListenerRegistration? = null
     @Volatile private var listenerId=""
     @Volatile private var lastPulse=0L
     @Volatile private var lastOwn=0L
     @Volatile private var lastSettle=0L
     @Volatile private var lastReward=0L
+    @Volatile private var leaseRetryAt=0L
+    private data class JournalFallback(val teamId: String, val retryAt: Long)
+    @Volatile private var journalFallback: JournalFallback? = null
     var view by mutableStateOf(CloudTeamView())
         private set
     var status by mutableStateOf("Firebase-kapcsolat indítása…")
+        private set
+    var bossTasks by mutableStateOf(CloudBossTaskView())
         private set
     private fun prefs(c:Context):SharedPreferences =
         c.getSharedPreferences("fokusz_cloud_team_v1",Context.MODE_PRIVATE)
@@ -88,6 +120,131 @@ object CloudTeams {
             ?: throw IllegalStateException("Nem sikerült az anonim Firebase-bejelentkezés.")
     }
     private fun teamRef(c:Context)=db().collection("teams").document(teamId(c))
+
+    private suspend fun <T> bankTransaction(
+        ref: DocumentReference,
+        operation: (Transaction, Boolean) -> T
+    ): T {
+        val fallback = journalFallback
+        if (fallback?.teamId == ref.id && SystemClock.elapsedRealtime() < fallback.retryAt) {
+            return db().runTransaction { operation(it, false) }.await()
+        }
+        return try {
+            db().runTransaction { operation(it, true) }.await()
+        } catch (e: FirebaseFirestoreException) {
+            if (e.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
+            val result = db().runTransaction { operation(it, false) }.await()
+            journalFallback = JournalFallback(ref.id, SystemClock.elapsedRealtime() + 300_000L)
+            result
+        }
+    }
+
+    private fun updateBank(
+        tx: Transaction,
+        snap: DocumentSnapshot,
+        changes: Map<String, Any>,
+        journal: Boolean,
+        kind: String,
+        uid: String,
+        eventId: String
+    ) {
+        val group = snap.reference
+        if (!journal) {
+            tx.update(group, changes)
+            return
+        }
+        val oldPool = snap.getLong("pool") ?: 0L
+        val oldBank = snap.getLong("bank") ?: 0L
+        tx.update(group, changes + ("lastBankEvent" to eventId))
+        tx.set(group.collection("bankEvents").document(eventId), mapOf(
+            "uid" to uid,
+            "kind" to kind,
+            "beforePool" to oldPool,
+            "beforeBank" to oldBank,
+            "afterPool" to ((changes["pool"] as? Number)?.toLong() ?: oldPool),
+            "afterBank" to ((changes["bank"] as? Number)?.toLong() ?: oldBank),
+            "createdAt" to FieldValue.serverTimestamp()
+        ))
+    }
+
+    private fun bankEventId(uid: String) = "${uid}_${UUID.randomUUID()}"
+
+    data class BankEvent(val uid: String, val kind: String, val beforePool: Long, val beforeBank: Long,
+                         val afterPool: Long, val afterBank: Long, val timestamp: Date)
+
+    suspend fun bankHistory(c: Context): List<BankEvent>? = withContext(Dispatchers.IO) {
+        if (!active(c)) return@withContext emptyList()
+        try {
+            ensureAuth()
+            teamRef(c).collection("bankEvents").orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(50).get().await().documents.mapNotNull { doc ->
+                    val at = doc.getTimestamp("createdAt")?.toDate() ?: return@mapNotNull null
+                    BankEvent(doc.getString("uid").orEmpty(), doc.getString("kind").orEmpty(),
+                        doc.getLong("beforePool") ?: 0L, doc.getLong("beforeBank") ?: 0L,
+                        doc.getLong("afterPool") ?: 0L, doc.getLong("afterBank") ?: 0L, at)
+                }
+        } catch (e: FirebaseFirestoreException) {
+            if (e.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
+            null
+        }
+    }
+
+    private fun watchBossTasks(ref: DocumentReference) {
+        bossTaskListener?.remove()
+        bossTasks = CloudBossTaskView(teamId = ref.id)
+        bossTaskListener = ref.collection("bossTasks").addSnapshotListener { snap, error ->
+            if (listenerId != ref.id) return@addSnapshotListener
+            if (error != null) {
+                bossTasks = CloudBossTaskView(teamId = ref.id, available = false)
+                return@addSnapshotListener
+            }
+            val tasks = snap?.documents.orEmpty().mapNotNull { doc ->
+                val activity = CloudBossActivity.entries.firstOrNull { it.key == doc.getString("activity") }
+                    ?: return@mapNotNull null
+                val uid = doc.getString("uid") ?: return@mapNotNull null
+                val round = doc.getTimestamp("round")?.toDate() ?: return@mapNotNull null
+                val baseline = doc.getLong("baseline")?.toInt() ?: return@mapNotNull null
+                val target = doc.getLong("target")?.toInt() ?: return@mapNotNull null
+                CloudBossTask(uid, activity, baseline, target, round)
+            }
+            bossTasks = CloudBossTaskView(ref.id, tasks, true)
+        }
+    }
+
+    suspend fun setBossTask(c: Context, activity: CloudBossActivity, target: Int): String = withContext(Dispatchers.IO) {
+        if (!active(c)) return@withContext "Nem vagy csapattag."
+        try {
+            val uid = ensureAuth()
+            val group = teamRef(c)
+            val assignment = group.collection("bossTasks").document("${uid}_${activity.key}")
+            if (target == 0) {
+                assignment.delete().await()
+                return@withContext "Vállalás visszavonva."
+            }
+            syncProfile(c)
+            val saved = db().runTransaction { tx ->
+                val snap = tx.get(group)
+                val old = tx.get(assignment)
+                val members = snap.get("members") as? Map<*, *> ?: return@runTransaction false
+                val member = members[uid] as? Map<*, *> ?: return@runTransaction false
+                if (target !in 1..(members.size * activity.goalPerMember)) return@runTransaction false
+                val round = snap.getTimestamp("bossClaimedAt") ?: return@runTransaction false
+                val baseline = if (old.getTimestamp("round") == round) old.getLong("baseline")
+                    else (member[activity.key] as? Number)?.toLong()
+                tx.set(assignment, mapOf("uid" to uid, "activity" to activity.key, "round" to round,
+                    "baseline" to (baseline ?: 0L), "target" to target,
+                    "updatedAt" to FieldValue.serverTimestamp()))
+                true
+            }.await()
+            if (saved) "Vállalás mentve." else "Adj meg a közös célnál kisebb pozitív vállalást."
+        } catch (e: FirebaseFirestoreException) {
+            if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                "A vállalásokhoz a csapat új Firebase-szabályai szükségesek."
+            } else "A vállalást most nem sikerült szinkronizálni."
+        } catch (_: Exception) {
+            "A vállalást most nem sikerült menteni."
+        }
+    }
     private fun todayUtc():Timestamp {
         val start=LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant()
         return Timestamp(Date.from(start))
@@ -226,6 +383,7 @@ object CloudTeams {
                 if(id.isNotBlank() && listenerId!=id) {
                     listener?.remove()
                     listenerId=id
+                    watchBossTasks(teamRef(app))
                     listener=teamRef(app).addSnapshotListener { snap,err ->
                         if(err!=null) {
                             status="Szinkronhiba: "+(err.localizedMessage ?: "nincs hozzáférés")
@@ -259,7 +417,8 @@ object CloudTeams {
                                 targetStudy=num("bossTargetStudy"),
                                 bossClaimed=(data["bossClaimedAt"] as? Timestamp)?.toDate(),
                                 syncedAt=System.currentTimeMillis(),
-                                cached=snap.metadata.isFromCache
+                                cached=snap.metadata.isFromCache,
+                                lastBankEvent=snap.getString("lastBankEvent").orEmpty()
                             )
                             status=if(snap.metadata.isFromCache)
                                 "Az utolsó szinkronizált állapot látható (offline)."
@@ -297,24 +456,25 @@ object CloudTeams {
     private suspend fun settle(c:Context) {
         if(!active(c))return
         try {
-            ensureAuth()
+            val uid = ensureAuth()
+            val ref = teamRef(c)
             repeat(8) {
-                val changed=db().runTransaction { tx ->
-                    val ref=teamRef(c)
+                val eventId = bankEventId(uid)
+                val changed = bankTransaction(ref) { tx, journal ->
                     val snap=tx.get(ref)
-                    if(!snap.exists())return@runTransaction false
-                    val last=snap.getTimestamp("lastDay") ?:return@runTransaction false
+                    if(!snap.exists())return@bankTransaction false
+                    val last=snap.getTimestamp("lastDay") ?:return@bankTransaction false
                     val next=Timestamp(Date(last.toDate().time+86400000L))
-                    if(next>todayUtc())return@runTransaction false
+                    if(next>todayUtc())return@bankTransaction false
                     val pool=(snap.getLong("pool")?:0L).coerceAtLeast(0)
                     val bank=(snap.getLong("bank")?:0L).coerceAtLeast(0)
                     val total=(pool+bank).coerceAtMost(MAX_BANK.toLong())
                     val nextBank=(total+total/10).coerceAtMost(MAX_BANK.toLong())
                     val size=(snap.get("members") as? Map<*,*>)?.size?:1
-                    tx.update(ref,mapOf("pool" to size*600,
-                        "bank" to nextBank,"lastDay" to next))
+                    updateBank(tx, snap, mapOf("pool" to size*600, "bank" to nextBank, "lastDay" to next),
+                        journal, "daily", uid, eventId)
                     true
-                }.await()
+                }
                 if(!changed)return
             }
         }catch(e:Exception){status="Napi bankfrissítés: "+(e.localizedMessage?:"hiba")}
@@ -372,19 +532,19 @@ object CloudTeams {
                 val eventId=uid+"_"+uuid
                 val ref=teamRef(c)
                 val ev=ref.collection("events").document(eventId)
-                val ok=db().runTransaction {tx ->
+                val ok = bankTransaction(ref) { tx, journal ->
                     val snap=tx.get(ref)
                     val existing=tx.get(ev)
-                    if(existing.exists())return@runTransaction true
+                    if(existing.exists())return@bankTransaction true
                     val pool=snap.getLong("pool")?:0L
-                    if(pool+300>MAX_POOL)return@runTransaction false
-                    tx.update(ref,mapOf(
+                    if(pool+300>MAX_POOL)return@bankTransaction false
+                    updateBank(tx, snap, mapOf(
                         "pool" to pool+300,
-                        "lastRewardEvent" to eventId))
+                        "lastRewardEvent" to eventId), journal, "quest", uid, eventId)
                     tx.set(ev,mapOf("uid" to uid,"amount" to 300,
                         "createdAt" to FieldValue.serverTimestamp()))
                     true
-                }.await()
+                }
                 if(!ok)break
                 val remaining=JSONArray()
                 for(j in 0 until items.length())if(items.optString(j)!=uuid)
@@ -393,42 +553,49 @@ object CloudTeams {
             }
         }catch(e:Exception){status="Quest szinkron: "+(e.localizedMessage?:"hiba")}
     }
-    private fun requestLease(c:Context) {
-        if(!active(c) || !leasing.compareAndSet(false,true))return
+    private fun requestLease(c: Context, maximum: Int) {
+        val id = teamId(c)
+        if (id.isBlank() || maximum <= 0 || SystemClock.elapsedRealtime() < leaseRetryAt ||
+            !leasing.compareAndSet(false, true)) return
         io.launch {
             try {
-                ensureAuth()
-                val taken=db().runTransaction {tx ->
-                    val ref=teamRef(c)
+                val uid = ensureAuth()
+                val ref = db().collection("teams").document(id)
+                val eventId = bankEventId(uid)
+                val taken = bankTransaction(ref) { tx, journal ->
                     val snap=tx.get(ref)
                     val pool=snap.getLong("pool")?:0L
                     val bank=snap.getLong("bank")?:0L
-                    val n=minOf(60L,pool+bank)
-                    if(n<=0L)return@runTransaction 0
+                    val n=minOf(60L, maximum.toLong(), pool+bank)
+                    if(n<=0L)return@bankTransaction 0
                     val fromPool=minOf(pool,n)
-                    tx.update(ref,mapOf("pool" to pool-fromPool,
-                        "bank" to bank-(n-fromPool)))
+                    updateBank(tx, snap, mapOf("pool" to pool-fromPool, "bank" to bank-(n-fromPool)),
+                        journal, "usage", uid, eventId)
                     n.toInt()
-                }.await()
-                if(taken>0) synchronized(this@CloudTeams) {
-                    val p=prefs(c)
-                    p.edit().putInt("lease",(p.getInt("lease",0)+taken)
-                        .coerceAtMost(120)).commit()
+                }
+                synchronized(this@CloudTeams) {
+                    if (teamId(c) == id && taken > 0) {
+                        val p = prefs(c)
+                        p.edit().putInt("lease", (p.getInt("lease", 0) + taken).coerceAtMost(120)).commit()
+                    } else if (teamId(c) == id) leaseRetryAt = SystemClock.elapsedRealtime() + 10_000L
                 }
             }catch(e:Exception){
+                if (teamId(c) == id) leaseRetryAt = SystemClock.elapsedRealtime() + 10_000L
                 status="Közös idő nem elérhető: "+(e.localizedMessage?:"kapcsolati hiba")
             }finally{leasing.set(false)}
         }
     }
-    @Synchronized fun spendSecond(c:Context):Boolean {
-        if(!active(c))return false
+    @Synchronized fun spendSecond(c: Context, sessionRemaining: Int? = null): Boolean {
+        if (!active(c) || sessionRemaining == 0) return false
         val p=prefs(c)
         val n=p.getInt("lease",0)
+        val unreserved = (sessionRemaining ?: 120) - n
         if(n<=0) {
-            requestLease(c);return false
+            requestLease(c, unreserved)
+            return false
         }
         p.edit().putInt("lease",n-1).commit()
-        if(n<=20)requestLease(c)
+        if(n<=20) requestLease(c, unreserved)
         return true
     }
     /** Idempotens átutalás a saját képernyőidőből: a helyi időt előbb
@@ -454,8 +621,8 @@ object CloudTeams {
                 .put("bank",toBank)
                 .put("teamId",teamId(c))
             // A küldésre lefoglalt pénz nem költhető el közben.
-            val debited=current-Store.addUncapped(c,-seconds.toLong())
-            if(debited!=seconds)return@withContext "Nem sikerült lefoglalni az időt."
+            val reason = if (toBank) "Befizetés a csapatbankba" else "Befizetés a közös keretbe"
+            if (!Store.spend(c, seconds, reason)) return@withContext "Nem sikerült lefoglalni az időt."
             p.edit().putString("contribution",operation.toString()).commit()
             val done=flushContribution(c)
             if(done) "✓ "+duration(seconds)+" a csapat "+
@@ -474,14 +641,13 @@ object CloudTeams {
             val id=op.getString("eventId")
             val amount=op.getInt("amount")
             val toBank=op.optBoolean("bank")
-            ensureAuth()
+            val uid = ensureAuth()
             val group=teamRef(c)
             val event=group.collection("events").document(id)
-            val ok=db().runTransaction{tx->
+            val ok = bankTransaction(group) { tx, journal ->
                 val snap=tx.get(group)
                 val existing=tx.get(event)
-                if(existing.exists())return@runTransaction true
-                val uid=auth().currentUser?.uid?:""
+                if(existing.exists())return@bankTransaction true
                 val members=snap.get("members") as? Map<*,*>
                 if(members==null||uid !in members)
                     throw IllegalStateException("Már nem vagy tagja a csapatnak.")
@@ -489,11 +655,12 @@ object CloudTeams {
                 val old=snap.getLong(field)?:0L
                 if(old+amount>Store.MAX_SAFE_SECONDS.toLong())
                     throw IllegalStateException("A technikai időhatár elérve.")
-                tx.update(group,mapOf(field to old+amount,"lastRewardEvent" to id))
+                updateBank(tx, snap, mapOf(field to old+amount, "lastRewardEvent" to id), journal,
+                    if (toBank) "personal_bank" else "personal_pool", uid, id)
                 tx.set(event,mapOf("uid" to uid,"amount" to amount,
                     "createdAt" to FieldValue.serverTimestamp()))
                 true
-            }.await()
+            }
             if(ok){
                 p.edit().remove("contribution").commit()
                 status="✓ A saját idő befizetése szinkronizálva."
@@ -514,19 +681,20 @@ object CloudTeams {
             if(seconds<=0)return@withContext "Adj meg pozitív percösszeget."
             try {
                 val uid=ensureAuth()
-                val success=db().runTransaction{tx->
-                    val ref=teamRef(c)
+                val ref=teamRef(c)
+                val eventId = bankEventId(uid)
+                val success = bankTransaction(ref) { tx, journal ->
                     val snap=tx.get(ref)
                     val members=snap.get("members") as? Map<*,*>
-                    if(members==null || uid !in members)return@runTransaction false
+                    if(members==null || uid !in members)return@bankTransaction false
                     val pool=snap.getLong("pool")?:0L
                     val bank=snap.getLong("bank")?:0L
                     if(seconds.toLong()>pool||
-                        bank+seconds>MAX_BANK.toLong())return@runTransaction false
-                    tx.update(ref,mapOf("pool" to pool-seconds,
-                        "bank" to bank+seconds))
+                        bank+seconds>MAX_BANK.toLong())return@bankTransaction false
+                    updateBank(tx, snap, mapOf("pool" to pool-seconds, "bank" to bank+seconds),
+                        journal, "transfer", uid, eventId)
                     true
-                }.await()
+                }
                 if(success)"✓ "+duration(seconds)+" átkerült a közös bankba."
                 else "A közös keretben nincs ennyi felhasználható idő."
             }catch(e:Exception){"Átvezetési hiba: "+(e.localizedMessage?:"Firebase-hiba")}
@@ -535,28 +703,29 @@ object CloudTeams {
     suspend fun claimBoss(c:Context):String=withContext(Dispatchers.IO) {
         if(!active(c))return@withContext "Nem vagy csapattag."
         try {
-            ensureAuth()
-            val won=db().runTransaction {tx ->
-                val ref=teamRef(c)
+            val uid = ensureAuth()
+            val ref = teamRef(c)
+            val eventId = bankEventId(uid)
+            val won = bankTransaction(ref) { tx, journal ->
                 val snap=tx.get(ref)
-                val members=snap.get("members") as? Map<*,*> ?:return@runTransaction false
+                val members=snap.get("members") as? Map<*,*> ?:return@bankTransaction false
                 fun v(k:String)=snap.getLong(k)?:0L
                 if(v("bossPush")<v("bossTargetPush") ||
                     v("bossChess")<v("bossTargetChess") ||
-                    v("bossStudy")<v("bossTargetStudy"))return@runTransaction false
+                    v("bossStudy")<v("bossTargetStudy"))return@bankTransaction false
                 val prior=snap.getTimestamp("bossClaimedAt")?.toDate()?.time?:0L
-                if(System.currentTimeMillis()-prior<7*86400000L)return@runTransaction false
+                if(System.currentTimeMillis()-prior<7*86400000L)return@bankTransaction false
                 val reward=members.size.toLong()*900L
-                if(v("pool")+reward>MAX_POOL)return@runTransaction false
-                tx.update(ref,mapOf(
+                if(v("pool")+reward>MAX_POOL)return@bankTransaction false
+                updateBank(tx, snap, mapOf(
                     "pool" to v("pool")+reward,
                     "bossClaimedAt" to FieldValue.serverTimestamp(),
                     "bossTargetPush" to v("bossPush")+members.size*100L,
                     "bossTargetChess" to v("bossChess")+members.size*10L,
                     "bossTargetStudy" to v("bossStudy")+members.size*10800L
-                ))
+                ), journal, "boss", uid, eventId)
                 true
-            }.await()
+            }
             if(won)"🏆 Boss Fight teljesítve! A csapat jutalma jóváírva."
             else "Még nincs teljesítve, 7 nap még nem telt el, vagy tele van a keret."
         }catch(e:Exception){"Boss Fight hiba: "+(e.localizedMessage?:"nincs hozzáférés")}
@@ -592,7 +761,11 @@ object CloudTeams {
         }catch(e:Exception){"Nem sikerült kilépni: "+(e.localizedMessage?:"hiba")}
     }
     @Synchronized fun clear(c:Context) {
+        leaseRetryAt = 0L
         listener?.remove();listener=null;listenerId=""
+        bossTaskListener?.remove()
+        bossTaskListener = null
+        bossTasks = CloudBossTaskView()
         prefs(c).edit().remove("teamId").remove("teamName").remove("key")
             .remove("owner").putInt("lease",0).putString("pending","[]").commit()
         view=CloudTeamView()

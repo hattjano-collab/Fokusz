@@ -55,14 +55,12 @@ object XeropanStore {
         val used=usedSeconds(c)
         if(used<300)return "Még "+duration(300-used)+" Xeropan-használat szükséges."
         p(c).edit().putString("claimed",LocalDate.now().toString()).commit()
-        val before=Store.bal(c)
-        Store.add(c,300)
-        val received=(Store.bal(c)-before).coerceAtLeast(0)
+        val received = Store.addStudyReward(c, 300, "Xeropan-jutalom")
         ProgressStore.earned(c,received)
         // Egy személyes nyelvtanulási quest: a csapatnak is +5 perc.
         ProgressStore.taskFinished(c,"LANGUAGE",300,0)
         return "✓ Xeropan teljesítve! +"+duration(received)+
-            " személyes képernyőidő, +5 perc a csapatnak (ha van csapat)."
+            " személyes jutalom, +5 perc a csapatnak (ha van csapat)."
     }
     fun open(c:Context) {
         try {

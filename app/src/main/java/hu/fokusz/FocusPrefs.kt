@@ -2,9 +2,12 @@ package hu.fokusz
 
 import android.content.Context
 import android.os.SystemClock
+import org.json.JSONArray
 import java.time.LocalDate
 
 object FocusPrefs {
+    const val CLASSROOM_PACKAGE = "com.google.android.apps.classroom"
+    const val MAX_FOCUS_NOTE = 2000
     private fun sp(c: Context) = c.getSharedPreferences("fokusz_options_v1", Context.MODE_PRIVATE)
     val socialChoices = listOf(
         "TikTok" to "com.zhiliaoapp.musically",
@@ -26,7 +29,7 @@ object FocusPrefs {
     // és az alapvető telefonos/biztonsági szolgáltatások.
     private val focusAllowed = setOf(
         "com.google.android.googlequicksearchbox", "com.openai.chatgpt",
-        "com.google.android.apps.classroom",
+        CLASSROOM_PACKAGE,
         "com.duolingo", "com.application.xeropan",
         "com.android.settings", "com.android.systemui",
         "com.google.android.gms", "com.android.phone", "com.google.android.dialer",
@@ -39,13 +42,18 @@ object FocusPrefs {
         "com.google.android.packageinstaller", "com.google.android.inputmethod.latin",
         "com.android.inputmethod.latin", "com.miui.guardprovider"
     )
-    fun allowedDuringFocus(c:Context, pkg:String):Boolean =
-        pkg.isBlank() || pkg==c.packageName || pkg in focusAllowed
+    fun alwaysAllowedInFocus(c: Context, pkg: String): Boolean = pkg == c.packageName || pkg in focusAllowed
+
+    fun allowedDuringFocus(c: Context, pkg: String): Boolean =
+        pkg.isBlank() || alwaysAllowedInFocus(c, pkg) ||
+            pkg in focus(c).getStringSet("subjectApps", emptySet()).orEmpty()
 
     private val standard = Store.BLOCKED + setOf("com.ss.android.ugc.trill")
     fun blocked(c: Context, pkg: String): Boolean {
+        if (pkg == CLASSROOM_PACKAGE) return false
         val p = sp(c)
-        return p.getBoolean("blocked_" + pkg, pkg in standard)
+        val canonical = SocialUsage.appKey(pkg)
+        return p.getBoolean("blocked_$canonical", p.getBoolean("blocked_$pkg", pkg in standard))
     }
     fun setBlocked(c: Context, pkg: String, enabled: Boolean) {
         sp(c).edit().putBoolean("blocked_" + pkg, enabled).apply()
@@ -82,17 +90,41 @@ object FocusPrefs {
     }
 
     private fun focus(c: Context) = c.getSharedPreferences("fokusz_focus_v1", Context.MODE_PRIVATE)
-    @Synchronized fun focusPhase(c: Context): Int = focus(c).getInt("phase", 0) // 0 off,1 active,2 finished
-    @Synchronized fun focusTarget(c: Context) = focus(c).getInt("target", 1500)
-    @Synchronized fun startFocus(c: Context, seconds: Int): Boolean {
-        if (focusPhase(c) == 1) return false
+    fun focusPhase(c: Context): Int = focus(c).getInt("phase", 0) // 0 off,1 active,2 finished
+    fun focusTarget(c: Context) = focus(c).getInt("target", 1500)
+    internal fun startFocus(c: Context, seconds: Int, subject: FocusSubject = FocusSubjects.general): Boolean {
         if (QuestStore.isTimerLocked(c)) return false
         if (seconds !in 900..7200) return false
-        focus(c).edit().putInt("phase", 1).putInt("target", seconds).putLong("elapsed", 0)
-            .putBoolean("paused",false).putLong("pauseSpent",0L)
-            .putLong("last", SystemClock.elapsedRealtime()).commit()
-        return true
+        return synchronized(this) {
+            if (focusPhase(c) == 1) return@synchronized false
+            focus(c).edit().putInt("phase", 1).putInt("target", seconds).putLong("elapsed", 0L)
+                .putBoolean("paused", false).putLong("pauseSpent", 0L)
+                .putLong("last", SystemClock.elapsedRealtime())
+                .putString("sessionId", java.util.UUID.randomUUID().toString())
+                .putString("subjectId", subject.id).putString("subjectName", subject.name)
+                .putStringSet("subjectApps", subject.packages).remove("note").commit()
+        }
     }
+    fun focusSessionId(c: Context): String = focus(c).getString("sessionId", "").orEmpty()
+    fun focusSubjectId(c: Context): String = focus(c).getString("subjectId", "").orEmpty()
+    fun focusSubjectName(c: Context): String = focus(c).getString("subjectName", FocusSubjects.general.name)
+        ?: FocusSubjects.general.name
+    fun focusNote(c: Context): String = focus(c).getString("note", "").orEmpty()
+
+    @Synchronized fun saveFocusNote(c: Context, text: String) {
+        if (focusPhase(c) != 1) return
+        focus(c).edit().putString("note", text.take(MAX_FOCUS_NOTE)).apply()
+    }
+
+    private fun rawFocusNotes(c: Context): JSONArray =
+        runCatching { JSONArray(focus(c).getString("pastNotes", "[]")) }.getOrElse { JSONArray() }
+
+    internal fun focusNotes(c: Context): List<FocusNote> {
+        val archived = rawFocusNotes(c)
+        return (0 until archived.length()).mapNotNull { archived.optJSONObject(it)?.let(FocusNote::fromJson) }
+            .sortedByDescending { it.finishedAt }
+    }
+
     fun focusPaused(c:Context):Boolean=focus(c).getBoolean("paused",false)
     fun pauseUsed(c:Context):Int=(focus(c).getLong("pauseSpent",0L)/1000L).toInt()
     @Synchronized fun togglePause(c:Context):Boolean {
@@ -126,14 +158,23 @@ object FocusPrefs {
     fun focusLocked(c: Context) = focusPhase(c) == 1 && focusLeft(c) > 0
     @Synchronized fun claimFocus(c: Context): Boolean {
         if (focusPhase(c) != 1 || focusLeft(c) > 0) return false
-        focus(c).edit().putInt("phase", 2).commit()
-        val reward = focusTarget(c) / 2
-        Store.add(c, reward)
-        ProgressStore.taskFinished(c, "STUDY", focusTarget(c), reward)
+        val target = focusTarget(c)
+        val subjectId = focusSubjectId(c)
+        val subjectName = focusSubjectName(c)
+        val note = focusNote(c).trim()
+        val editor = focus(c).edit().putInt("phase", 2)
+        if (note.isNotBlank()) {
+            val result = FocusNote(subjectId, subjectName, System.currentTimeMillis(), target, note)
+            editor.putString("pastNotes", rawFocusNotes(c).put(result.toJson()).toString())
+        }
+        if (!editor.commit()) return false
+        val credited = Store.addStudyReward(c, target / 2, "Fókuszidő jutalma")
+        val title = if (subjectId.isEmpty()) "Mélyfókusz" else "Mélyfókusz · $subjectName"
+        ProgressStore.taskFinished(c, "STUDY", target, credited, title = title)
         return true
     }
     @Synchronized fun clearFocus(c: Context) {
-        if (focusPhase(c) == 2) focus(c).edit().putInt("phase", 0).commit()
+        if (focusPhase(c) == 2) focus(c).edit().putInt("phase", 0).remove("note").commit()
     }
 
 }
