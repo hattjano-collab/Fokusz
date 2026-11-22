@@ -3,10 +3,8 @@ package hu.fokusz
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,9 +30,8 @@ import androidx.compose.ui.unit.sp
     var mode by remember { mutableStateOf("pushups") }
     var count by remember(mode) { mutableIntStateOf(CoachRewards.count(ctx,mode)) }
     var rewardNote by remember(mode) { mutableStateOf("") }
-    var rejected by remember(mode) { mutableIntStateOf(0) }
-    var lastReason by remember(mode) { mutableStateOf("") }
     var running by remember(mode) { mutableStateOf(false) }
+    var sessionCount by remember(mode, running) { mutableIntStateOf(0) }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("AI-MOZGÁSEDZŐ", color = Color(0xFFF5F7FF), fontSize = 24.sp,
             fontWeight = FontWeight.Black)
@@ -59,10 +56,6 @@ import androidx.compose.ui.unit.sp
             color=Color(0xFFFFC78D),fontSize=14.sp,fontWeight=FontWeight.Bold)
         if (rewardNote.isNotBlank()) Text(rewardNote,color=Color(0xFF7BE7C1),
             fontWeight=FontWeight.Bold)
-        Text("✓ Elfogadott: " + count + "    •    ⚠ Javítandó testhelyzet: " + rejected,
-            color=Color(0xFFF5F7FF),fontSize=13.sp)
-        if(lastReason.isNotEmpty())Text("Tipp: " + lastReason,
-            color=Color(0xFFFFC78D),fontSize=12.sp)
         if (!running) {
             Button(onClick = {running=true}, modifier = Modifier.fillMaxWidth().height(50.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7BE7C1),
@@ -72,18 +65,15 @@ import androidx.compose.ui.unit.sp
             OutlinedButton(onClick = {running=false}, modifier = Modifier.fillMaxWidth()) {
                 Text("Kamera kikapcsolása")
             }
-            val recognized:()->Unit={
+            Text(if (mode == "plank") "Ebben az edzésben: $sessionCount mp" else "Ebben az edzésben: $sessionCount ismétlés",
+                color = Color(0xFFF5F7FF), fontSize = 14.sp)
+            WorkoutCamera(key = "coach_$mode", session = "coach_$mode", mode = mode) {
                 val result=CoachRewards.recognized(ctx,mode)
                 count=result.count
                 rewardNote = if (result.awarded > 0) "✦ +${result.awarded} mp képernyőidő!"
                     else "Elérted a képernyőidő-egyenleg plafonját."
-            }
-            if(mode=="pushups") {
-                WebPushupCamera(questId=-1000,onRep=recognized)
-            }else {
-                PushupCamera(-1000,mode=mode,onIssue={reason->
-                    rejected++;lastReason=reason
-                },onRep=recognized)
+                sessionCount += 1
+                sessionCount
             }
         }
         Text("Az AI-edző külön is jutalmaz; a napi questek jutalma ettől független.",

@@ -135,7 +135,8 @@ import java.util.Locale
                     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)) {
                         if(schedule.isEmpty())Text("Nincs esemény",color=Color(0xFFA7B4CC),fontSize=11.sp)
                         schedule.take(3).forEach {event->
-                            Text(event.time.format(DateTimeFormatter.ofPattern("HH:mm"))+
+                            val whenText = if (event.allDay) "Egész nap" else event.time.format(DateTimeFormatter.ofPattern("HH:mm"))
+                            Text(whenText+
                                 " · "+event.title,color=Color.White,fontSize=12.sp,maxLines=1)
                         }
                         if(schedule.size>3)Text("+"+(schedule.size-3)+" további",
@@ -149,9 +150,11 @@ import java.util.Locale
             events.forEach { event ->
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(event.time.format(DateTimeFormatter.ofPattern("HH:mm"))+"  "+event.title,
+                        val whenText = if (event.allDay) "Egész nap" else event.time.format(DateTimeFormatter.ofPattern("HH:mm"))
+                        Text(whenText+"  "+event.title,
                             color=Color.White,fontWeight=FontWeight.SemiBold)
-                        Text(event.source+" • "+event.minutes+" perc",color=Color(0xFFA7B4CC),
+                        val details = if (event.allDay) event.source else event.source+" • "+event.minutes+" perc"
+                        Text(details,color=Color(0xFFA7B4CC),
                             fontSize=11.sp)
                     }
                     if(event.source=="Fókusz")
@@ -224,7 +227,8 @@ import java.util.Locale
         FeatureBox("⏰ KÖVETKEZŐ ESEMÉNYEK") {
             if(week.isEmpty())Text("Nincs közelgő esemény.",color=Color(0xFFA7B4CC))
             week.forEach { e ->
-                Text(e.time.format(DateTimeFormatter.ofPattern("MM.dd. HH:mm"))+" • "+e.title,
+                val pattern = if (e.allDay) "MM.dd." else "MM.dd. HH:mm"
+                Text(e.time.format(DateTimeFormatter.ofPattern(pattern))+" • "+e.title,
                     color=Color.White,fontSize=13.sp)
             }
             Text("Közelgő eseménynél a rendszer rövidebb feladatokat ajánl.",

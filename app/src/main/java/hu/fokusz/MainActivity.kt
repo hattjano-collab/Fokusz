@@ -142,10 +142,12 @@ data class Hand(
 
 class MainActivity : ComponentActivity() {
     private var requestedTab by mutableIntStateOf(-1)
+    private var quizShare by mutableStateOf<QuizShare?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        QuizShare.from(intent)?.let { quizShare = it }
         if(intent.hasExtra("focus_tab"))
             requestedTab=intent.getIntExtra("focus_tab",8)
     }
@@ -153,6 +155,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         requestedTab=intent?.getIntExtra("focus_tab",-1) ?: -1
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) quizShare = QuizShare.from(intent)
         window.statusBarColor = android.graphics.Color.rgb(9,15,31)
         window.navigationBarColor = android.graphics.Color.rgb(9,15,31)
         setContent {
@@ -164,7 +167,11 @@ class MainActivity : ComponentActivity() {
                 onBackground = White,
                 onSurface = White
             )) {
-                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) { FokuszApp(requestedTab) }
+                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) {
+                    FokuszApp(requestedTab, quizShare) { received ->
+                        if (quizShare?.id == received) quizShare = null
+                    }
+                }
             }
         }
     }
@@ -276,11 +283,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable fun FokuszApp(openTab:Int = -1) {
+@Composable internal fun FokuszApp(openTab: Int = -1, quizShare: QuizShare? = null,
+                                 onShareConsumed: (String) -> Unit = {}) {
     val ctx = LocalContext.current
     val version = remember(ctx) { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }
     var tab by rememberSaveable { mutableStateOf(0) }
     LaunchedEffect(openTab) { if(openTab in 0..11) tab=openTab }
+    LaunchedEffect(quizShare?.id) { if (quizShare != null) tab = 11 }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
@@ -490,7 +499,7 @@ class MainActivity : ComponentActivity() {
                         Triple(8,"🔥","Duolingo"),
                         Triple(9,"👥","Csapatok"),
                         Triple(10,"📚","Xeropan"),
-                        Triple(11,"✎","Tanulási eszközök")
+                        Triple(11,"▣","Kvíz fotózása")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -534,7 +543,7 @@ class MainActivity : ComponentActivity() {
             }
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
                 "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo","Csapatok","Xeropan",
-                "Tanulási eszközök").getOrElse(tab) { "Fókusz" },
+                "Kvíz fotózása").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
@@ -832,7 +841,7 @@ class MainActivity : ComponentActivity() {
         } else if(tab==10) {
             XeropanPanel()
         } else if(tab==11) {
-            StudyToolsPanel(onQuestStarted = { tab = 1 }, openTimeTab = { tab = 2 })
+            QuizPhotoPanel(quizShare, onShareConsumed)
         }
         Spacer(Modifier.height(14.dp))
         Text("FÓKUSZ  •  $version", color = Muted.copy(alpha = .6f),

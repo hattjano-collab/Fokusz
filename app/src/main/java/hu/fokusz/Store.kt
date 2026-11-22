@@ -4,6 +4,7 @@ import android.content.Context
 import java.time.LocalDate
 import java.util.UUID
 import org.json.JSONArray
+import org.json.JSONObject
 
 object Store {
     const val DAILY = 1800 // 30 perc másodpercben
@@ -30,10 +31,118 @@ object Store {
         "com.mi.globalbrowser", "com.UCMobile.intl", "com.kiwibrowser.browser"
     )
     private fun sp(c: Context) = c.getSharedPreferences("f", 0)
+    private const val WALLET_DEBITS = "backup_wallet_debits"
+    private const val INSTALLATION = "backup_installation"
+    private const val LAST_RESTORE = "backup_last_restore"
+    private const val LAST_BACKUP_ID = "backup_last_id"
+    private const val QUIZ_ATTEMPTS = "quiz_attempts_v1"
+    private const val CHESS_REWARD = "chess_reward_"
+    private const val STUDY_CLAIM = "study_claim_"
+
+    internal data class BackupWallet(
+        val day: LocalDate,
+        val balance: Int,
+        val debits: Long,
+        val installation: String
+    )
+
+    internal data class BackupWalletData(
+        val wallet: BackupWallet,
+        val chessReceipts: Set<String>,
+        val studyReceipts: Set<String>,
+        val quizAttempts: JSONArray
+    )
+
+    @Synchronized internal fun walletBackup(c: Context): BackupWalletData {
+        val preferences = sp(c)
+        val day = LocalDate.now()
+        val dayKey = day.toString()
+        val isCurrentDay = preferences.getString("d", null) == dayKey
+        val installation = preferences.getString(INSTALLATION, null) ?: UUID.randomUUID().toString().also {
+            check(preferences.edit().putString(INSTALLATION, it).commit())
+        }
+        val saved = preferences.all
+        val wallet = BackupWallet(
+            day,
+            if (isCurrentDay) preferences.getInt("b", DAILY) else DAILY,
+            if (isCurrentDay) preferences.getLong(WALLET_DEBITS, 0L) else 0L,
+            installation
+        )
+        return BackupWalletData(
+            wallet,
+            saved.keys.filterTo(mutableSetOf()) { it.startsWith(CHESS_REWARD) },
+            saved.keys.filterTo(mutableSetOf()) { it.startsWith(STUDY_CLAIM) && saved[it] == dayKey },
+            JSONArray(preferences.getString(QUIZ_ATTEMPTS, "[]") ?: "[]")
+        )
+    }
+
+    @Synchronized internal fun restoreWalletBackup(
+        c: Context,
+        backup: BackupWalletData,
+        backupId: String,
+        issuedAt: Long
+    ): Boolean {
+        val preferences = sp(c)
+        require(backupId != preferences.getString(LAST_BACKUP_ID, null) &&
+            issuedAt > preferences.getLong(LAST_RESTORE, 0L)) {
+            "Ezt a mentést vagy egy frissebb változatát már visszaállítottad."
+        }
+        val editor = preferences.edit().putString(LAST_BACKUP_ID, backupId).putLong(LAST_RESTORE, issuedAt)
+        val localAttempts = JSONArray(preferences.getString(QUIZ_ATTEMPTS, "[]") ?: "[]")
+        editor.putString(QUIZ_ATTEMPTS, mergeQuizAttempts(localAttempts, backup.quizAttempts).toString())
+        // A már jutalmazott eredmény az import után sem adhat jóvá újra időt.
+        for (key in backup.chessReceipts) {
+            if (!preferences.contains(key)) editor.putInt(key, 0)
+        }
+        val today = LocalDate.now()
+        val todayKey = today.toString()
+        val restoreBalance = backup.wallet.day == today
+        var delta = 0
+        if (restoreBalance) {
+            val sameDay = preferences.getString("d", null) == todayKey
+            val localDebits = if (sameDay) preferences.getLong(WALLET_DEBITS, 0L) else 0L
+            val sameInstallation = preferences.getString(INSTALLATION, null) == backup.wallet.installation
+            val unrepresentedDebits = if (sameInstallation) {
+                (localDebits - backup.wallet.debits).coerceAtLeast(0L)
+            } else {
+                localDebits
+            }
+            val newBalance = (backup.wallet.balance.toLong() - unrepresentedDebits).coerceAtLeast(0L).toInt()
+            val oldBalance = if (sameDay) preferences.getInt("b", DAILY) else DAILY
+            delta = newBalance - oldBalance
+            editor.putString("d", todayKey).putInt("b", newBalance).putLong(WALLET_DEBITS, localDebits)
+            for (key in backup.studyReceipts) editor.putString(key, todayKey)
+        }
+        check(editor.commit()) { "Az időkeretet és a jutalmak előzményeit nem sikerült menteni." }
+        if (delta != 0) ScreenTimeLedger.record(c, "Időkeret visszaállítása mentésből", delta)
+        return restoreBalance
+    }
+
+    private fun mergeQuizAttempts(local: JSONArray, imported: JSONArray): JSONArray {
+        val entries = linkedMapOf<String, JSONObject>()
+        for (array in listOf(local, imported)) {
+            for (index in 0 until array.length()) {
+                val row = array.getJSONObject(index)
+                val id = row.getString("id")
+                val existing = entries[id]
+                if (existing == null) {
+                    entries[id] = row
+                } else {
+                    val fingerprints = linkedSetOf<String>()
+                    for (aliases in listOf(existing.optJSONArray("fingerprints"), row.optJSONArray("fingerprints"))) {
+                        if (aliases == null) continue
+                        for (alias in 0 until aliases.length()) fingerprints.add(aliases.getString(alias))
+                    }
+                    existing.put("fingerprints", JSONArray(fingerprints))
+                }
+            }
+        }
+        return JSONArray(entries.values)
+    }
 
     @Synchronized fun creditChessGame(c: Context, gameId: String, seconds: Int): Int {
         val prefs = sp(c)
-        val rewardKey = "chess_reward_$gameId"
+        val rewardKey = CHESS_REWARD + gameId
         if (prefs.contains(rewardKey)) return prefs.getInt(rewardKey, 0)
         val old = bal(c)
         val updated = (old + seconds).coerceAtMost(rewardCeiling(c, old))
@@ -51,7 +160,7 @@ object Store {
         val previous = s.getString("d", null)
         if (previous != today) {
             val old = s.getInt("b", 0)
-            s.edit().putString("d", today).putInt("b", DAILY).apply()
+            s.edit().putString("d", today).putInt("b", DAILY).remove(WALLET_DEBITS).apply()
             if (previous != null) ScreenTimeLedger.record(c, "Előző napi keret lezárása", -old)
             ScreenTimeLedger.record(c, "Napi alapkeret", DAILY)
         }
@@ -89,7 +198,12 @@ object Store {
 
     private fun saveBalance(c: Context, balance: Int, delta: Int, reason: String): Boolean {
         if (delta == 0) return true
-        if (!sp(c).edit().putInt("b", balance).commit()) return false
+        val preferences = sp(c)
+        val editor = preferences.edit().putInt("b", balance)
+        if (delta < 0) {
+            editor.putLong(WALLET_DEBITS, preferences.getLong(WALLET_DEBITS, 0L) - delta)
+        }
+        if (!editor.commit()) return false
         ScreenTimeLedger.record(c, reason, delta)
         return true
     }
@@ -112,6 +226,25 @@ object Store {
         }
         ProgressStore.updateWidget(c)
         return true
+    }
+
+    internal enum class QuizWrite { SAVED, HISTORY_CHANGED, LIMIT_REACHED, STORAGE_ERROR }
+
+    internal fun quizAttempts(c: Context): String = sp(c).getString(QUIZ_ATTEMPTS, "[]") ?: "[]"
+
+    internal fun commitQuizAttempt(c: Context, previous: String, history: String, seconds: Int): QuizWrite {
+        synchronized(this) {
+            val prefs = sp(c)
+            if (quizAttempts(c) != previous) return QuizWrite.HISTORY_CHANGED
+            val balance = bal(c)
+            if (seconds < 0 || seconds > MAX_SAFE_SECONDS - balance) return QuizWrite.LIMIT_REACHED
+            val edit = prefs.edit().putString(QUIZ_ATTEMPTS, history)
+            if (seconds > 0) edit.putInt("b", balance + seconds)
+            if (!edit.commit()) return QuizWrite.STORAGE_ERROR
+            ScreenTimeLedger.record(c, "Javított kvíz", seconds)
+        }
+        if (seconds > 0) ProgressStore.updateWidget(c)
+        return QuizWrite.SAVED
     }
 
     private fun rewardCeiling(c: Context, balance: Int): Int =
@@ -169,7 +302,7 @@ object Store {
         creditStudy(c, seconds, reason, null) ?: 0
 
     fun claimStudyReward(c: Context, seconds: Int, claimKey: String): Int? =
-        creditStudy(c, seconds, "Tanulási jutalom", "study_claim_$claimKey")
+        creditStudy(c, seconds, "Tanulási jutalom", STUDY_CLAIM + claimKey)
 
     private fun creditStudy(c: Context, seconds: Int, reason: String, claimKey: String?): Int? {
         if (seconds <= 0) return 0

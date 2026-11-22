@@ -1,9 +1,10 @@
 package hu.fokusz
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
-import android.speech.tts.TextToSpeech
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.ToneGenerator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,52 +12,77 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import java.util.Locale
 
-internal class WorkoutSpeech(context: Context) {
-    private val handler = Handler(Looper.getMainLooper())
-    var available by mutableStateOf<Boolean?>(null)
-        private set
-    private var engine: TextToSpeech? = null
+/** A becsomagolt magyar számok telepített beszédmotor nélkül is működnek. */
+internal class WorkoutSpeech(private val context: Context) {
+    private val pending = ArrayDeque<Int>()
+    private var player: MediaPlayer? = null
+    private var tone: ToneGenerator? = null
 
-    init {
-        engine = TextToSpeech(context.applicationContext) { status ->
-            handler.post {
-                val tts = engine ?: return@post
-                available = status == TextToSpeech.SUCCESS &&
-                    tts.setLanguage(Locale.forLanguageTag("hu-HU")) >= TextToSpeech.LANG_AVAILABLE
+    fun speak(count: Int) {
+        if (count < 0) return
+        if (count <= 100) pending.addLast(count) else count.toString().forEach { pending.addLast(it.digitToInt()) }
+        playNext()
+    }
+
+    private fun playNext() {
+        if (player != null || pending.isEmpty()) return
+        val next = pending.removeFirst()
+        val audio = MediaPlayer()
+        player = audio
+        fun finish() {
+            if (player !== audio) return
+            player = null
+            audio.release()
+            playNext()
+        }
+        try {
+            audio.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            context.assets.openFd("workout_numbers/$next.ogg").use { asset ->
+                audio.setDataSource(asset.fileDescriptor, asset.startOffset, asset.length)
             }
+            audio.setOnCompletionListener { finish() }
+            audio.setOnErrorListener { _, _, _ -> finish(); true }
+            audio.setOnPreparedListener {
+                if (player === audio && runCatching { audio.start() }.isFailure) finish()
+            }
+            audio.prepareAsync()
+        } catch (_: Exception) {
+            finish()
         }
     }
 
-    fun speak(count: Int) {
-        if (available == true) {
-            engine?.speak(count.toString(), TextToSpeech.QUEUE_FLUSH, null, "fokusz-rep-$count")
+    fun cue(finished: Boolean = false) {
+        runCatching {
+            val beeper = tone ?: ToneGenerator(AudioManager.STREAM_MUSIC, 75).also { tone = it }
+            beeper.startTone(if (finished) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_BEEP,
+                if (finished) 350 else 130)
         }
     }
 
     fun stop() {
-        engine?.stop()
+        pending.clear()
+        player?.release()
+        player = null
+        tone?.stopTone()
     }
 
     fun close() {
-        handler.removeCallbacksAndMessages(null)
-        engine?.shutdown()
-        engine = null
+        stop()
+        tone?.release()
+        tone = null
     }
 }
 
 @Composable
 internal fun rememberWorkoutSpeech(): WorkoutSpeech {
-    val context = LocalContext.current
+    val context = LocalContext.current.applicationContext
     val speech = remember(context) { WorkoutSpeech(context) }
     DisposableEffect(speech) { onDispose { speech.close() } }
     return speech
@@ -73,9 +99,6 @@ internal fun WorkoutSpeechToggle(speech: WorkoutSpeech, enabled: Boolean, onTogg
         Switch(checked = enabled, onCheckedChange = { next ->
             if (!next) speech.stop()
             onToggle(next)
-        }, enabled = speech.available != false)
-    }
-    if (speech.available == false) {
-        Text("A készüléken nincs elérhető magyar felolvasóhang.", color = Color(0xFFA7B4CC))
+        })
     }
 }

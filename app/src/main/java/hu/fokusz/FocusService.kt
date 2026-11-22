@@ -31,6 +31,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.time.LocalDate
 
 object UsageGuard {
     fun allowed(c: Context): Boolean {
@@ -40,13 +41,15 @@ object UsageGuard {
 }
 
 class FocusService : Service() {
-    private enum class CoverReason { QUEST, BALANCE, BREAK, APP_LIMIT }
+    private enum class CoverReason { QUEST, BALANCE, BREAK, APP_LIMIT, TEAM_OFFER, TEAM_WAIT }
 
     companion object {
         @Volatile var isRunning = false
         private const val CHANNEL = "fokusz-monitor"
     }
     private val handler = Handler(Looper.getMainLooper())
+    private val balanceWarning = BalanceWarning()
+    private val teamSession = TeamTimeSession()
     private var lastEventTime = 0L
     private var currentPackage = ""
     private var cover: View? = null
@@ -135,6 +138,7 @@ class FocusService : Service() {
         }
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            teamSession.clear()
             hideCover()
             return
         }
@@ -157,20 +161,28 @@ class FocusService : Service() {
         }
         val questLocked = QuestStore.isTimerLocked(this)
         val focusLocked = FocusPrefs.focusLocked(this)
+        val focusAllowed = FocusPrefs.allowedDuringFocus(this, currentPackage)
+        if (currentPackage == FocusPrefs.CLASSROOM_PACKAGE || QuizDraft.isCameraActive(currentPackage) ||
+            (focusLocked && focusAllowed && !questLocked)) {
+            teamSession.clear()
+            hideCover()
+            return
+        }
         val locked = questLocked || focusLocked
-        val browsersLocked = (QuestStore.isCustomTimerLocked(this) || focusLocked) &&
-            currentPackage in Store.BROWSERS
+        val browsersLocked = QuestStore.isCustomTimerLocked(this) && currentPackage in Store.BROWSERS
         val trackedSocial = FocusPrefs.blocked(this, currentPackage)
         val isSocial = trackedSocial
             || (locked && (currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL))
-        val focusUnapproved = focusLocked && !FocusPrefs.allowedDuringFocus(this,currentPackage)
+        val focusUnapproved = focusLocked && !focusAllowed
         if (!isSocial && !browsersLocked && !focusUnapproved) {
+            teamSession.clear()
             hideCover()
             return
         }
 
         val emergency = FocusPrefs.emergencyActive(this)
         if (locked && !emergency) {
+            teamSession.clear()
             showCover(CoverReason.QUEST)
             return
         }
@@ -185,11 +197,35 @@ class FocusService : Service() {
         }
 
         val spendReason = ScreenTimeLedger.socialReason(currentPackage)
+        val threshold = ScreenTimeAlerts.warningSeconds(this)
+        val today = LocalDate.now()
+        val personalBefore = Store.bal(this)
+        if (personalBefore > threshold) balanceWarning.shouldVibrate(today, personalBefore, threshold)
         val spentPersonal = Store.spend(this, 1, spendReason)
-        val spentTeam = !emergency && !spentPersonal && CloudTeams.spendSecond(this)
-        if (!emergency && !spentPersonal && !spentTeam) {
-            showCover(CoverReason.BALANCE)
-            return
+        var spentTeam = false
+        if (spentPersonal || emergency) {
+            teamSession.clear()
+            if (!emergency && balanceWarning.shouldVibrate(today, Store.bal(this), threshold)) {
+                ScreenTimeAlerts.vibrate(this)
+            }
+        } else {
+            val teamId = CloudTeams.teamId(this)
+            val automatic = ScreenTimeAlerts.automaticTeamTime(this)
+            val grant = teamSession.remaining(teamId, today)
+            if (teamId.isBlank()) {
+                showCover(CoverReason.BALANCE)
+                return
+            }
+            if (!automatic && grant == 0) {
+                showCover(CoverReason.TEAM_OFFER)
+                return
+            }
+            spentTeam = CloudTeams.spendSecond(this, if (automatic) null else grant)
+            if (!spentTeam) {
+                showCover(CoverReason.TEAM_WAIT)
+                return
+            }
+            if (!automatic) teamSession.spentSecond()
         }
         if (spentTeam) ScreenTimeLedger.record(this, "$spendReason · csapatkeret", -1)
         ProgressStore.used(this, 1)
@@ -226,6 +262,7 @@ class FocusService : Service() {
                 CoverReason.BALANCE -> "🔒 Fókusz\nElfogyott a mai időkereted"
                 CoverReason.BREAK -> "Fókusz\nKötelező szünet"
                 CoverReason.APP_LIMIT -> "🔒 Fókusz\nElérted az app napi keretét"
+                CoverReason.TEAM_OFFER, CoverReason.TEAM_WAIT -> "Fókusz\nElfogyott a saját időkereted"
             }
             textSize = 26f
             gravity = Gravity.CENTER
@@ -237,6 +274,8 @@ class FocusService : Service() {
                 CoverReason.BALANCE -> "A Fókusz alkalmazásban további perceket szerezhetsz."
                 CoverReason.BREAK -> countdown.orEmpty()
                 CoverReason.APP_LIMIT -> "A többi kiválasztott apphoz továbbra is használhatod a maradék idődet."
+                CoverReason.TEAM_OFFER -> "Felhasználsz 5 percet a közös keretből? Az idő csak használat közben fogy."
+                CoverReason.TEAM_WAIT -> "A közös idő most nem érhető el. A Fókusz újra próbálkozik."
             }
             textSize = 17f
             setTextColor(Color.LTGRAY)
@@ -252,7 +291,18 @@ class FocusService : Service() {
                 startActivity(i)
             }
         }
-        panel.addView(title); panel.addView(desc); panel.addView(button)
+        panel.addView(title)
+        panel.addView(desc)
+        if (reason == CoverReason.TEAM_OFFER) {
+            panel.addView(Button(this).apply {
+                text = "Kérek 5 percet a csapattól"
+                setOnClickListener {
+                    teamSession.grant(CloudTeams.teamId(this@FocusService), LocalDate.now())
+                    showCover(CoverReason.TEAM_WAIT)
+                }
+            })
+        }
+        panel.addView(button)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,

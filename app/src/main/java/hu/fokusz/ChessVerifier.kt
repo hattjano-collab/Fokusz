@@ -10,6 +10,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONException
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
@@ -40,16 +41,38 @@ data class ChessDailyResult(
     val day: LocalDate
 )
 
-private enum class ChessOutcome(val key: String, val seconds: Int) {
-    WIN("wins", 60), LOSS("losses", 30), DRAW("draws", 45)
+enum class ChessOutcome(val key: String, val seconds: Int, val label: String) {
+    WIN("wins", 60, "Győzelem"),
+    LOSS("losses", 30, "Vereség"),
+    DRAW("draws", 45, "Döntetlen")
 }
 
-private data class ChessGame(val id: String, val outcome: ChessOutcome)
+data class ChessReward(
+    val id: String,
+    val platform: ChessPlatform,
+    val opponent: String?,
+    val outcome: ChessOutcome,
+    val playedAt: Instant,
+    val verifiedAt: Instant,
+    val creditedSeconds: Int,
+    val gameUrl: String?
+)
+
+private data class ChessGame(
+    val id: String,
+    val outcome: ChessOutcome,
+    val opponent: String?,
+    val playedAt: Instant,
+    val url: String?
+)
 
 object ChessVerifier {
+    private const val HISTORY_PREFIX = "reward_history_"
     private val accountLock = Any()
     private val progressLock = Mutex()
     private val usernamePattern = Regex("[A-Za-z0-9_-]{2,25}")
+    private val chessComGamePath = Regex("/(?:game/(?:live|daily)|(?:live|daily)/game)/[0-9]+/?")
+    private val lichessGamePath = Regex("/[A-Za-z0-9]{1,16}/?")
     private val archiveFormat = DateTimeFormatter.ofPattern("uuuu/MM", Locale.ROOT)
 
     private fun accountPrefs(c: Context): SharedPreferences {
@@ -86,6 +109,31 @@ object ChessVerifier {
     fun wins(c: Context) = scores(c).getInt(ChessOutcome.WIN.key, 0)
     fun losses(c: Context) = scores(c).getInt(ChessOutcome.LOSS.key, 0)
     fun draws(c: Context) = scores(c).getInt(ChessOutcome.DRAW.key, 0)
+
+    suspend fun rewardHistory(c: Context): List<ChessReward> = withContext(Dispatchers.IO) {
+        scores(c).all.mapNotNull { (key, value) ->
+            if (!key.startsWith(HISTORY_PREFIX) || value !is String) return@mapNotNull null
+            try {
+                val entry = JSONObject(value)
+                val platform = ChessPlatform.entries.find { it.key == entry.getString("platform") }
+                    ?: return@mapNotNull null
+                val outcome = ChessOutcome.entries.find { it.key == entry.getString("outcome") }
+                    ?: return@mapNotNull null
+                ChessReward(
+                    id = key.removePrefix(HISTORY_PREFIX),
+                    platform = platform,
+                    opponent = entry.optionalText("opponent"),
+                    outcome = outcome,
+                    playedAt = Instant.ofEpochMilli(entry.getLong("playedAt")),
+                    verifiedAt = Instant.ofEpochMilli(entry.getLong("verifiedAt")),
+                    creditedSeconds = entry.getInt("creditedSeconds"),
+                    gameUrl = gameUrl(platform, entry.optString("url"))
+                )
+            } catch (_: JSONException) {
+                null
+            }
+        }.sortedWith(compareByDescending<ChessReward> { it.playedAt }.thenBy { it.id })
+    }
 
     fun weekGames(c: Context): Int {
         val today = LocalDate.now()
@@ -164,12 +212,18 @@ object ChessVerifier {
                 val ownColor = listOf("white", "black").firstOrNull { color ->
                     players?.optJSONObject(color)?.optJSONObject("user")?.optString("id").equals(name, true)
                 } ?: return@mapNotNull null
+                val otherColor = if (ownColor == "white") "black" else "white"
+                val player = players?.optJSONObject(otherColor)
+                val user = player?.optJSONObject("user")
+                val opponent = user?.optionalText("name") ?: user?.optionalText("id")
+                    ?: player?.optInt("aiLevel")?.takeIf { it > 0 }?.let { "Stockfish $it" }
                 val outcome = when (game.optString("winner")) {
                     "" -> ChessOutcome.DRAW
                     ownColor -> ChessOutcome.WIN
                     else -> ChessOutcome.LOSS
                 }
-                ChessGame("l:$id", outcome)
+                ChessGame("l:$id", outcome, opponent, Instant.ofEpochMilli(end),
+                    gameUrl(ChessPlatform.LICHESS, "https://lichess.org/$id"))
             }.toList()
     }
 
@@ -191,9 +245,12 @@ object ChessVerifier {
                 val end = game.optLong("end_time") * 1000L
                 val id = game.optString("url")
                 if (end !in from..to || id.isBlank()) return@mapNotNull null
-                val own = listOf("white", "black").mapNotNull(game::optJSONObject)
+                val white = game.optJSONObject("white")
+                val black = game.optJSONObject("black")
+                val own = listOfNotNull(white, black)
                     .firstOrNull { it.optString("username").equals(name, true) }
                     ?: return@mapNotNull null
+                val opponent = (if (own === white) black else white)?.optionalText("username")
                 val code = own.optString("result")
                 if (code.isBlank()) return@mapNotNull null
                 val outcome = when (code) {
@@ -201,9 +258,28 @@ object ChessVerifier {
                     in draws -> ChessOutcome.DRAW
                     else -> ChessOutcome.LOSS
                 }
-                ChessGame("c:$id", outcome)
+                ChessGame("c:$id", outcome, opponent, Instant.ofEpochMilli(end),
+                    gameUrl(ChessPlatform.CHESS_COM, id))
             }
         }.toList()
+    }
+
+    private fun JSONObject.optionalText(key: String): String? =
+        if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+    private fun gameUrl(platform: ChessPlatform, value: String): String? {
+        val url = runCatching { URI(value) }.getOrNull() ?: return null
+        if (!url.scheme.equals("https", true) || url.userInfo != null ||
+            url.port != -1 && url.port != 443) return null
+        val host = url.host?.lowercase(Locale.ROOT)
+        val path = url.path.orEmpty()
+        val valid = when (platform) {
+            ChessPlatform.CHESS_COM ->
+                (host == "www.chess.com" || host == "chess.com") && chessComGamePath.matches(path)
+            ChessPlatform.LICHESS ->
+                host == "lichess.org" && lichessGamePath.matches(path)
+        }
+        return value.takeIf { valid }
     }
 
     private fun cacheKey(account: ChessAccount) =
@@ -238,6 +314,15 @@ object ChessVerifier {
                 totals[game.outcome] = totals.getValue(game.outcome) + 1
                 dayTotal++
                 editor.putBoolean("game_${game.id}", true)
+                val history = JSONObject()
+                    .put("platform", account.platform.key)
+                    .put("opponent", game.opponent)
+                    .put("outcome", game.outcome.key)
+                    .put("playedAt", game.playedAt.toEpochMilli())
+                    .put("verifiedAt", System.currentTimeMillis())
+                    .put("creditedSeconds", credited)
+                    .put("url", game.url)
+                editor.putString(HISTORY_PREFIX + game.id, history.toString())
             }
             ids.add(game.id)
         }

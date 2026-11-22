@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import java.time.LocalDate
 import java.util.Locale
 
 private val QBG = Color(0xFF141E32)
@@ -125,6 +126,7 @@ private val QLILAC = Color(0xFFB9AAFF)
         mutableStateOf(QuestStore.active(ctx).ifEmpty { "chess" })
     }
     var cameraOn by remember { mutableStateOf(false) }
+    var cameraDay by remember { mutableStateOf<LocalDate?>(null) }
     var customEditing by remember { mutableStateOf(false) }
     var customTitle by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
@@ -139,6 +141,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     }
 
     val quest = remember(refresh) { QuestStore.ensureQuest(ctx) }
+    val workoutSpeech = rememberWorkoutSpeech()
     val p = QuestStore.phase(ctx)
     val doneChess = QuestStore.chessDone(ctx)
     val donePush = QuestStore.pushDone(ctx)
@@ -446,32 +449,45 @@ private val QLILAC = Color(0xFFB9AAFF)
                             color=QSOFT,fontSize=12.sp)
                     }
                 } else if (quest.kind == QuestKind.PUSHUPS || quest.kind == QuestKind.EXERCISE) {
-                    Text("KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
+                    val workoutDay = LocalDate.now()
+                    val reps = QuestStore.reps(ctx)
+                    val remainingReps = (quest.goal - reps).coerceAtLeast(0)
+                    Text(if (quest.mode == "plank") "KAMERÁVAL SZÁMOLT MÁSODPERCEK" else "KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
                         fontWeight = FontWeight.Bold)
-                    Text(QuestStore.reps(ctx).toString() + " / " + quest.goal,
+                    Text("$reps / ${quest.goal}",
                         color = QWHITE, textAlign = TextAlign.Center,
                         fontSize = 48.sp,
                         fontWeight = FontWeight.ExtraBold, modifier = Modifier.fillMaxWidth())
+                    Text(if (quest.mode == "plank") "Hátra: $remainingReps mp" else "Hátra: $remainingReps ismétlés",
+                        color = QGREEN, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     LinearProgressIndicator(
-                        progress = { QuestStore.reps(ctx).toFloat() / quest.goal },
+                        progress = { (reps.toFloat() / quest.goal).coerceIn(0f, 1f) },
                         color = QGREEN, trackColor = QEDGE,
                         modifier = Modifier.fillMaxWidth().height(9.dp).clip(CircleShape)
                     )
-                    if (!cameraOn) {
-                        QPrimary("KAMERÁS SZÁMLÁLÓ INDÍTÁSA") { cameraOn = true }
-                    } else {
-                        QSecondary("Kamera kikapcsolása") { cameraOn = false }
-                        val onRep:()->Unit={
-                            QuestStore.rep(ctx,quest.id)
-                            update()
+                    if (!cameraOn || cameraDay != workoutDay) {
+                        QPrimary(if (reps == 0) "KAMERÁS SZÁMLÁLÓ INDÍTÁSA" else "FOLYTATÁS KAMERÁVAL") {
+                            cameraDay = workoutDay
+                            cameraOn = true
                         }
-                        if(quest.mode=="pushups") {
-                            WebPushupCamera(questId=quest.id,onRep=onRep)
-                        }else {
-                            PushupCamera(quest.id,mode=quest.mode,onRep=onRep)
+                    } else {
+                        QSecondary("Kamera kikapcsolása") {
+                            workoutSpeech.stop()
+                            cameraOn = false
+                        }
+                        WorkoutCamera(key = "quest_${quest.id}_${quest.mode}", session = "$workoutDay", mode = quest.mode,
+                            speech = workoutSpeech) {
+                            if (LocalDate.now() != workoutDay) null
+                            else {
+                                val before = QuestStore.reps(ctx)
+                                QuestStore.rep(ctx, quest.id)
+                                val after = QuestStore.reps(ctx)
+                                update()
+                                after.takeIf { it > before }
+                            }
                         }
                     }
-                    Text("A kamerás testtartás-felismerés becslés; nem garantálható, hogy minden szabálytalan ismétlést felismer.",
+                    Text("A felismert ismétlések automatikusan mentődnek. A kamerás felismerést a fényviszonyok és a kamera szöge befolyásolja.",
                         color = QSOFT, fontSize = 12.sp)
                 } else {
                     if (p == 0) {

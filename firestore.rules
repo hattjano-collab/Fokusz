@@ -11,6 +11,20 @@ service cloud.firestore {
     function eventPath(team, eventId) {
       return /databases/$(database)/documents/teams/$(team)/events/$(eventId);
     }
+    function bankEventPath(team, eventId) {
+      return /databases/$(database)/documents/teams/$(team)/bankEvents/$(eventId);
+    }
+    function validBankRecord(team, eventId, kind) {
+      return eventId is string && eventId.size() >= 20 && eventId.size() <= 160
+        && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
+        && !exists(bankEventPath(team,eventId))
+        && existsAfter(bankEventPath(team,eventId))
+        && getAfter(bankEventPath(team,eventId)).data.kind == kind;
+    }
+    function compatibleBankRecord(team, kind) {
+      let eventId = request.resource.data.get('lastBankEvent','');
+      return eventId == resource.data.get('lastBankEvent','') || validBankRecord(team,eventId,kind);
+    }
     function mainKeys() {
       return ['ownerUid','name','inviteKey','joinProof','createdAt','lastDay',
         'members','pool','bank','lastRewardEvent','bossPush','bossChess',
@@ -73,12 +87,12 @@ service cloud.firestore {
         && request.resource.data.bossStudy ==
              resource.data.bossStudy + after.study - before.study;
     }
-    function validSpend() {
+    function validSpend(team) {
       let oldTotal = resource.data.pool + resource.data.bank;
       let newTotal = request.resource.data.pool + request.resource.data.bank;
       let spent = oldTotal - newTotal;
       return request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['pool','bank'])
+            .hasOnly(['pool','bank','lastBankEvent'])
         && spent >= 1 && spent <= 60
         && request.resource.data.pool >= 0
         && request.resource.data.bank >= 0
@@ -86,25 +100,27 @@ service cloud.firestore {
            (resource.data.pool >= spent ? resource.data.pool - spent : 0)
         && request.resource.data.bank ==
            resource.data.bank - (spent - (resource.data.pool -
-                                           request.resource.data.pool));
+                                           request.resource.data.pool))
+        && compatibleBankRecord(team,'usage');
     }
-    function validDailySettlement() {
+    function validDailySettlement(team) {
       let total = resource.data.bank + resource.data.pool;
       let nextBank = total + int(total / 10);
       return request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['lastDay','pool','bank'])
+             .hasOnly(['lastDay','pool','bank','lastBankEvent'])
         && request.resource.data.lastDay ==
              resource.data.lastDay + duration.value(1,'d')
         && request.resource.data.lastDay <= request.time.date()
         && request.resource.data.pool ==
              resource.data.members.keys().size() * 600
         && request.resource.data.bank ==
-             (nextBank > 2000000000 ? 2000000000 : nextBank);
+             (nextBank > 2000000000 ? 2000000000 : nextBank)
+        && compatibleBankRecord(team,'daily');
     }
     function validQuestReward(team) {
       let eventId = request.resource.data.lastRewardEvent;
       return request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['pool','lastRewardEvent'])
+            .hasOnly(['pool','lastRewardEvent','lastBankEvent'])
         && eventId is string && eventId.size() >= 20 && eventId.size() <= 160
         && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
         && eventId != resource.data.lastRewardEvent
@@ -113,7 +129,8 @@ service cloud.firestore {
         && getAfter(eventPath(team,eventId)).data.uid == request.auth.uid
         && getAfter(eventPath(team,eventId)).data.amount == 300
         && request.resource.data.pool == resource.data.pool + 300
-        && request.resource.data.pool <= 2000000000;
+        && request.resource.data.pool <= 2000000000
+        && compatibleBankRecord(team,'quest');
     }
     function validPersonalContribution(team) {
       // Egy csapattag csak az időkeretet VAGY a bankot emelheti, és
@@ -126,7 +143,7 @@ service cloud.firestore {
       let bankDelta = request.resource.data.bank - resource.data.bank;
       let contribution = poolDelta + bankDelta;
       return request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['pool','bank','lastRewardEvent'])
+             .hasOnly(['pool','bank','lastRewardEvent','lastBankEvent'])
         && eventId is string
         && eventId.matches(uid + '_[A-Za-z0-9-]+')
         && eventId.size() >= 20 && eventId.size() <= 160
@@ -139,24 +156,26 @@ service cloud.firestore {
         && ((poolDelta > 0 && bankDelta == 0) ||
             (bankDelta > 0 && poolDelta == 0))
         && request.resource.data.pool <= 2000000000
-        && request.resource.data.bank <= 2000000000;
+        && request.resource.data.bank <= 2000000000
+        && compatibleBankRecord(team,bankDelta > 0 ? 'personal_bank' : 'personal_pool');
     }
-    function validBankTransfer() {
+    function validBankTransfer(team) {
       // A közös keretből a bankba helyezett idő nem teremthet
       // plusz perceket, csak átcsoportosítja a meglévőket.
       let delta = resource.data.pool - request.resource.data.pool;
       return request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['pool','bank'])
+             .hasOnly(['pool','bank','lastBankEvent'])
         && delta > 0
         && request.resource.data.pool >= 0
         && request.resource.data.bank == resource.data.bank + delta
-        && request.resource.data.bank <= 2000000000;
+        && request.resource.data.bank <= 2000000000
+        && compatibleBankRecord(team,'transfer');
     }
-    function validBossReward() {
+    function validBossReward(team) {
       let n = resource.data.members.keys().size();
       return request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['pool','bossClaimedAt','bossTargetPush',
-               'bossTargetChess','bossTargetStudy'])
+               'bossTargetChess','bossTargetStudy','lastBankEvent'])
         && resource.data.bossPush >= resource.data.bossTargetPush
         && resource.data.bossChess >= resource.data.bossTargetChess
         && resource.data.bossStudy >= resource.data.bossTargetStudy
@@ -166,7 +185,8 @@ service cloud.firestore {
         && request.resource.data.pool <= 2000000000
         && request.resource.data.bossTargetPush == resource.data.bossPush + n * 100
         && request.resource.data.bossTargetChess == resource.data.bossChess + n * 10
-        && request.resource.data.bossTargetStudy == resource.data.bossStudy + n * 10800;
+        && request.resource.data.bossTargetStudy == resource.data.bossStudy + n * 10800
+        && compatibleBankRecord(team,'boss');
     }
     function validMemberRemoval() {
       let uid = request.auth.uid;
@@ -186,6 +206,16 @@ service cloud.firestore {
         && request.resource.data.bossTargetPush == resource.data.bossTargetPush - 100
         && request.resource.data.bossTargetChess == resource.data.bossTargetChess - 10
         && request.resource.data.bossTargetStudy == resource.data.bossTargetStudy - 10800;
+    }
+    function validMemberUpdate(team) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasAny(['members'])
+        ? (changed.hasAny(['bossTargetPush']) ? validMemberRemoval() : validProfileUpdate())
+        : changed.hasAny(['lastDay']) ? validDailySettlement(team)
+        : changed.hasAny(['bossClaimedAt']) ? validBossReward(team)
+        : changed.hasAny(['lastRewardEvent'])
+          ? (validQuestReward(team) || validPersonalContribution(team))
+          : (request.resource.data.bank > resource.data.bank ? validBankTransfer(team) : validSpend(team));
     }
     match /teams/{teamId} {
       allow create: if signedIn()
@@ -216,12 +246,7 @@ service cloud.firestore {
              timestamp.date(1970,1,1);
       allow get: if isMember();
       allow list: if false;
-      allow update: if validJoin() ||
-        (isMember() &&
-          (validProfileUpdate() || validSpend() || validDailySettlement()
-            || validQuestReward(teamId) || validPersonalContribution(teamId) ||
-            validBankTransfer() || validBossReward()
-            || validMemberRemoval()));
+      allow update: if signedIn() && (isMember() ? validMemberUpdate(teamId) : validJoin());
       allow delete: if isMember() &&
         resource.data.ownerUid == request.auth.uid;
 
@@ -241,6 +266,51 @@ service cloud.firestore {
           && request.auth.uid in get(teamPath(teamId)).data.members
           && getAfter(teamPath(teamId)).data.lastRewardEvent == eventId;
         allow update, delete: if false;
+      }
+
+      match /bankEvents/{eventId} {
+        allow read: if signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+        allow create: if signedIn() && validRow();
+        allow update, delete: if false;
+
+        function validRow() {
+          let team = get(teamPath(teamId)).data;
+          let next = getAfter(teamPath(teamId)).data;
+          let row = request.resource.data;
+          let keys = ['uid','kind','beforePool','beforeBank','afterPool','afterBank','createdAt'];
+          return request.auth.uid in team.members
+            && row.keys().hasAll(keys) && row.keys().hasOnly(keys)
+            && row.uid == request.auth.uid && row.createdAt == request.time
+            && eventId != team.get('lastBankEvent','') && eventId == next.lastBankEvent
+            && row.beforePool == team.pool && row.beforeBank == team.bank
+            && row.afterPool == next.pool && row.afterBank == next.bank;
+        }
+      }
+
+      match /bossTasks/{taskId} {
+        allow read: if signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+        allow create: if signedIn() && validTask(null);
+        allow update: if signedIn() && validTask(resource.data);
+        allow delete: if signedIn() && request.auth.uid == resource.data.uid
+          && request.auth.uid in get(teamPath(teamId)).data.members;
+
+        function validTask(previous) {
+          let team = get(teamPath(teamId)).data;
+          let uid = request.auth.uid;
+          let task = request.resource.data;
+          let keys = ['uid','activity','baseline','target','round','updatedAt'];
+          let perMember = {'push':100, 'chess':10, 'study':10800};
+          return uid in team.members
+            && task.keys().hasAll(keys) && task.keys().hasOnly(keys)
+            && task.uid == uid && task.activity in perMember
+            && taskId == uid + '_' + task.activity
+            && task.round == team.bossClaimedAt && task.updatedAt == request.time
+            && task.target is int && task.target > 0
+            && task.target <= team.members.keys().size() * perMember[task.activity]
+            && task.baseline is int && task.baseline ==
+               (previous != null && previous.round == task.round
+                ? previous.baseline : team.members[uid][task.activity]);
+        }
       }
     }
   }
