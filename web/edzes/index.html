@@ -22,7 +22,7 @@
 </section>
 <main class="layout">
 <div class="card camera-wrap">
-<div class="camera-top"><div><strong>Élő kamera</strong><div class="subtle">Váll · könyök · csukló</div></div><span id="livePill" class="live">● KIKAPCSOLVA</span></div>
+<div class="camera-top"><div><strong>Élő kamera</strong><div id="alignment" class="subtle" role="status">Az egyik karod látszódjon oldalról.</div></div><span id="livePill" class="live">● KIKAPCSOLVA</span></div>
 <div class="stage" id="stage">
 <video id="video" playsinline autoplay muted></video>
 <canvas id="overlay" aria-label="A kamera által felismert kar vázlata"></canvas>
@@ -68,6 +68,7 @@
 </div>
 <div class="setting-row">
 <div class="toggle"><label for="sound">Hangjelzés sikeres ismétlésnél</label><input id="sound" type="checkbox" checked></div>
+<div id="speechOption" class="toggle"><label for="speech">Hangos ismétlésszámláló</label><input id="speech" type="checkbox"></div>
 <div class="toggle"><label for="vibrate">Rezgés telefonon</label><input id="vibrate" type="checkbox" checked></div>
 </div>
 </div>
@@ -86,11 +87,16 @@ import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@m
 const el=(id)=>document.getElementById(id);
 const video=el("video"),canvas=el("overlay"),ctx=canvas.getContext("2d");
 let detector=null,stream=null,active=false,facing="user",raf=0,lastFrame=-1;
-let count=0,goal=10,stage=0,lastRepAt=-1e9,poseState="Várakozás",lastMeasure=0,notified=false;
+let count=0,goal=10,stage=0,lastRepAt=-1e9,invisibleFrames=0;
 const LEFT=[11,13,15],RIGHT=[12,14,16],MINSCORE=.38;
+const ARM_POINTS=["a vállad","a könyököd","a csuklód"];
 const LOWER=120,UPPER=145,COOLDOWN=450;
-const CONNECT=[[11,13],[13,15],[12,14],[14,16]];
-function setHint(message){el("hint").textContent=message}
+const synthesizer=window.speechSynthesis;
+function setText(id,message){
+  const node=el(id);
+  if(node.textContent!==message)node.textContent=message;
+}
+function setHint(message){setText("hint",message)}
 function setPhase(message){el("phase").textContent=message}
 function setAngle(deg){
   el("angleText").textContent=Number.isFinite(deg)?Math.round(deg)+"°":"–°";
@@ -113,7 +119,14 @@ function confetti(){
 function rep(){
   count++;updateScore();confetti();
   if(el("vibrate").checked&&navigator.vibrate)navigator.vibrate(65);
-  if(el("sound").checked){
+  const speak=el("speech").checked&&synthesizer;
+  if(speak){
+    const utterance=new SpeechSynthesisUtterance(String(count));
+    utterance.lang="hu-HU";
+    synthesizer.cancel();
+    synthesizer.speak(utterance);
+  }
+  if(el("sound").checked&&!speak){
     try{const AC=window.AudioContext||window.webkitAudioContext;
       const audio=new AC(),osc=audio.createOscillator(),gain=audio.createGain();
       osc.type="sine";osc.frequency.value=count>=goal?740:585;
@@ -125,13 +138,21 @@ function rep(){
     }catch(_){}
   }
 }
-function quality(p,indices){
-  const points=indices.map(i=>p[i]);
-  return points.every(v=>v&&((v.visibility??1)>=MINSCORE))
-    ?points.reduce((a,v)=>a+(v.visibility??1),0):0;
+function visible(point){
+  return !!point&&(point.visibility??1)>=MINSCORE&&
+    point.x>=0&&point.x<=1&&point.y>=0&&point.y<=1;
+}
+function arm(p,indices){
+  const count=indices.filter(i=>visible(p[i])).length;
+  const confidence=indices.reduce((sum,i)=>sum+(p[i]?.visibility??0),0);
+  return {indices,count,confidence};
+}
+function namePoints(points){
+  return points.length<2?points[0]:points.slice(0,-1).join(", ")+" és "+points.at(-1);
 }
 function angle(a,b,c){
-  const x=(a.x-b.x),y=(a.y-b.y),u=(c.x-b.x),v=(c.y-b.y);
+  const width=video.videoWidth,height=video.videoHeight;
+  const x=(a.x-b.x)*width,y=(a.y-b.y)*height,u=(c.x-b.x)*width,v=(c.y-b.y)*height;
   const size=Math.hypot(x,y)*Math.hypot(u,v);
   if(size<.000001)return NaN;
   return Math.acos(Math.max(-1,Math.min(1,(x*u+y*v)/size)))*180/Math.PI;
@@ -139,14 +160,22 @@ function angle(a,b,c){
 /* Pontosan ugyanaz a 3 állapotú szöglogika, mint az Android ML Kit számlálójában.
    A pose pontokat böngészőben MediaPipe, Androidon ML Kit szolgáltatja. */
 function analyze(p){
-  const side=quality(p,LEFT)>=quality(p,RIGHT)?LEFT:RIGHT;
-  if(quality(p,side)<=0) {
-    poseState="Látható kar kell";
+  const left=arm(p,LEFT),right=arm(p,RIGHT);
+  const selected=left.count>right.count||
+    (left.count===right.count&&left.confidence>=right.confidence)?left:right;
+  const side=selected.indices;
+  const shown=ARM_POINTS.filter((_,i)=>visible(p[side[i]]));
+  const missing=ARM_POINTS.filter((_,i)=>!visible(p[side[i]]));
+  if(missing.length) {
+    if(++invisibleFrames>=4)stage=0;
     setAngle(NaN);
-    setPhase(poseState);
-    setHint("Elég egy kar a képen. Mutasd a válladat, könyöködet és csuklódat oldalról.");
+    setPhase("Kamerabeállítás");
+    setText("alignment",shown.length?"Látszik "+namePoints(shown)+".":"A kamera még nem látja a karodat.");
+    setHint("Igazíts a kamerán, hogy "+namePoints(missing)+" is látszódjon.");
     return side;
   }
+  invisibleFrames=0;
+  setText("alignment","A vállad, a könyököd és a csuklód látszik.");
   const a=angle(p[side[0]],p[side[1]],p[side[2]]);
   setAngle(a);
   if(!Number.isFinite(a)){
@@ -178,15 +207,18 @@ function overlay(p,side){
   const w=video.videoWidth,h=video.videoHeight;
   if(!w||!h)return;
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
-  ctx.clearRect(0,0,w,h);if(!p)return;
-  const ids=side&&quality(p,side)>0?side:[];
-  if(ids.length===3){
+  ctx.clearRect(0,0,w,h);
+  const ids=side.filter(i=>visible(p[i]));
+  if(ids.length){
     ctx.strokeStyle="#7ce8c4";ctx.lineWidth=Math.max(4,w/150);ctx.lineCap="round";
-    ctx.beginPath();ctx.moveTo(p[ids[0]].x*w,p[ids[0]].y*h);
-    ctx.lineTo(p[ids[1]].x*w,p[ids[1]].y*h);
-    ctx.lineTo(p[ids[2]].x*w,p[ids[2]].y*h);ctx.stroke();
-    ids.forEach((i,idx)=>{ctx.beginPath();ctx.arc(p[i].x*w,p[i].y*h,Math.max(6,w/95),0,2*Math.PI);
-      ctx.fillStyle=idx===1?"#f8cd88":"#7ce8c4";ctx.fill();ctx.strokeStyle="#081827";
+    for(let index=1;index<side.length;index++){
+      const previous=p[side[index-1]],point=p[side[index]];
+      if(!visible(previous)||!visible(point))continue;
+      ctx.beginPath();ctx.moveTo(previous.x*w,previous.y*h);
+      ctx.lineTo(point.x*w,point.y*h);ctx.stroke();
+    }
+    ids.forEach(i=>{ctx.beginPath();ctx.arc(p[i].x*w,p[i].y*h,Math.max(6,w/95),0,2*Math.PI);
+      ctx.fillStyle=i===side[1]?"#f8cd88":"#7ce8c4";ctx.fill();ctx.strokeStyle="#081827";
       ctx.lineWidth=2;ctx.stroke();});
   }
 }
@@ -211,22 +243,22 @@ function render(t){
     lastFrame=video.currentTime;
     try{
       const result=detector.detectForVideo(video,t);
-      const p=result.landmarks&&result.landmarks[0];
-      const side=p?analyze(p):null;
-      if(!p) {setAngle(NaN);setPhase("Kar keresése");setHint("Mutasd az egyik karodat oldalról a kamerának – nem kell az egész tested.");}
-      overlay(p,side);
+      const p=result.landmarks?.[0]??[];
+      overlay(p,analyze(p));
     }catch(e){console.warn("Frame error",e);}
   }
   raf=requestAnimationFrame(render);
 }
 async function stop(){
   active=false;cancelAnimationFrame(raf);
+  stage=0;invisibleFrames=0;synthesizer?.cancel();
   if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
   video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);
   el("placeholder").style.display="flex";el("scanlabel").classList.remove("show");
   el("livePill").classList.remove("on");el("livePill").textContent="● KIKAPCSOLVA";
   el("startBtn").textContent="▶ Kamera indítása";
   setPhase("Kamerára vár");setAngle(NaN);
+  setText("alignment","Az egyik karod látszódjon oldalról.");
   setHint("A kamera leállt. A számláló megmarad, és bármikor újraindíthatod.");
 }
 async function start(){
@@ -257,7 +289,10 @@ el("flipBtn").addEventListener("click",async()=>{
   canvas.classList.toggle("front",facing==="user");
   const was=active;if(was){await stop();await start();}
 });
-el("resetBtn").addEventListener("click",()=>{count=0;stage=0;lastRepAt=-1e9;updateScore();setHint("Számláló nullázva. Indulj fentről.");});
+el("resetBtn").addEventListener("click",()=>{count=0;stage=0;lastRepAt=-1e9;synthesizer?.cancel();updateScore();setHint("Számláló nullázva. Indulj fentről.");});
+el("speech").addEventListener("change",()=>{if(!el("speech").checked)synthesizer?.cancel();});
+el("speechOption").hidden=!!window.FokuszAndroid||!synthesizer;
+if(el("speechOption").hidden)el("speechOption").style.display="none";
 el("presets").addEventListener("click",e=>{
   const selected=e.target.closest("[data-goal]");
   if(!selected)return;
