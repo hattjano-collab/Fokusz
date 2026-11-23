@@ -89,6 +89,7 @@ object ProgressStore {
 
     @Synchronized fun coachReps(c: Context, count: Int, mode: String = "pushups") {
         if(count<=0) return
+        BossProgress.add(c, mode, count)
         increment(c,"reps",count)
         if(mode=="pushups") increment(c,"pushups",count)
         val p=sp(c)
@@ -101,7 +102,7 @@ object ProgressStore {
     }
 
     @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int, title: String? = null,
-                                   receipt: String? = null) {
+                                   receipt: String? = null, shareWithTeam: Boolean = true) {
         val completedAt = LocalDateTime.now()
         val date = completedAt.toLocalDate()
         val stats = day(c, date)
@@ -150,7 +151,7 @@ object ProgressStore {
         progress.commit()
         updateWidget(c)
         // Minden ténylegesen befejezett személyes quest egyszer +5 percet ad a csapatnak.
-        CloudTeams.questCompleted(c)
+        if (shareWithTeam) CloudTeams.questCompleted(c)
     }
 
     fun xp(c: Context) = sp(c).getInt("xp", 0)

@@ -40,30 +40,13 @@ data class CloudMember(
 data class CloudTeamView(
     val id:String="",val name:String="",val pool:Int=0,val bank:Int=0,
     val members:List<CloudMember> = emptyList(),
-    val push:Int=0,val chess:Int=0,val study:Int=0,
-    val targetPush:Int=100,val targetChess:Int=10,val targetStudy:Int=10800,
-    val bossClaimed:Date?=null,val syncedAt:Long=0L,val cached:Boolean=true,
+    val syncedAt:Long=0L,val cached:Boolean=true,
     val lastBankEvent: String = ""
 )
 
-enum class CloudBossActivity(val key: String, val label: String, val goalPerMember: Int) {
-    PUSH("push", "Fekvőtámasz", 100), CHESS("chess", "Sakkparti", 10), STUDY("study", "Tanulás", 10800);
-
-    fun count(member: CloudMember): Int = when (this) {
-        PUSH -> member.push
-        CHESS -> member.chess
-        STUDY -> member.study
-    }
-
-    fun display(secondsOrCount: Int): String =
-        if (this == STUDY) duration(secondsOrCount) else secondsOrCount.toString()
-}
-
-data class CloudBossTask(val uid: String, val activity: CloudBossActivity, val baseline: Int,
-                         val target: Int, val round: Date)
-
-data class CloudBossTaskView(val teamId: String = "", val tasks: List<CloudBossTask> = emptyList(),
-                             val available: Boolean? = null)
+internal data class CloudWeeklyBoss(val teamId: String = "", val week: LocalDate? = null,
+                                   val plans: Map<String, List<BossLine>> = emptyMap(),
+                                   val claimed: Boolean = false, val allowed: Boolean? = null)
 
 /** Internetes csapatok: Firebase Anonymous Auth + Cloud Firestore, Spark csomagon.
  * A közös egyenleget kizárólag Firestore-tranzakcióval módosítjuk.
@@ -79,7 +62,7 @@ object CloudTeams {
     private val starting=AtomicBoolean(false)
     private val leasing=AtomicBoolean(false)
     private var listener:ListenerRegistration?=null
-    private var bossTaskListener: ListenerRegistration? = null
+    private var weeklyBossListener: ListenerRegistration? = null
     @Volatile private var listenerId=""
     @Volatile private var lastPulse=0L
     @Volatile private var lastOwn=0L
@@ -92,7 +75,7 @@ object CloudTeams {
         private set
     var status by mutableStateOf("Firebase-kapcsolat indítása…")
         private set
-    var bossTasks by mutableStateOf(CloudBossTaskView())
+    internal var weeklyBoss by mutableStateOf(CloudWeeklyBoss())
         private set
     private fun prefs(c:Context):SharedPreferences =
         c.getSharedPreferences("fokusz_cloud_team_v1",Context.MODE_PRIVATE)
@@ -192,62 +175,119 @@ object CloudTeams {
         }
     }
 
-    private fun watchBossTasks(ref: DocumentReference) {
-        bossTaskListener?.remove()
-        bossTasks = CloudBossTaskView(teamId = ref.id)
-        bossTaskListener = ref.collection("bossTasks").addSnapshotListener { snap, error ->
+    internal fun teamBossWeek(): LocalDate = monday(LocalDate.now(ZoneOffset.UTC))
+
+    private fun weekTimestamp(week: LocalDate): Timestamp =
+        Timestamp(Date.from(week.atStartOfDay(ZoneOffset.UTC).toInstant()))
+
+    private fun weekly(ref: DocumentReference) = ref.collection("weeklyBoss").document("current")
+
+    private fun plans(snap: DocumentSnapshot): Map<String, List<BossLine>> {
+        val raw = snap.get("plans") as? Map<*, *> ?: return emptyMap()
+        return raw.mapNotNull { (uid, value) ->
+            val key = uid as? String ?: return@mapNotNull null
+            val list = value as? List<*> ?: return@mapNotNull null
+            val lines = list.mapNotNull { entry ->
+                val data = entry as? Map<*, *> ?: return@mapNotNull null
+                val activity = data["activity"] as? String ?: return@mapNotNull null
+                val title = data["title"] as? String ?: return@mapNotNull null
+                val unit = BossUnit.entries.firstOrNull { it.key == data["unit"] } ?: return@mapNotNull null
+                val target = (data["target"] as? Number)?.toInt() ?: return@mapNotNull null
+                val session = (data["session"] as? Number)?.toInt() ?: return@mapNotNull null
+                val done = (data["done"] as? Number)?.toInt() ?: return@mapNotNull null
+                BossLine(BossGoal(BossActivity(activity, title, unit, session), target), done)
+            }
+            if (lines.size == 3 && BossQuest.valid(lines.map { it.goal })) key to lines else null
+        }.toMap()
+    }
+
+    private fun watchWeeklyBoss(ref: DocumentReference) {
+        weeklyBossListener?.remove()
+        weeklyBoss = CloudWeeklyBoss(teamId = ref.id)
+        weeklyBossListener = weekly(ref).addSnapshotListener { snap, error ->
             if (listenerId != ref.id) return@addSnapshotListener
             if (error != null) {
-                bossTasks = CloudBossTaskView(teamId = ref.id, available = false)
-                return@addSnapshotListener
+                weeklyBoss = CloudWeeklyBoss(teamId = ref.id,
+                    allowed = if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) false else null)
+            } else if (snap != null) {
+                weeklyBoss = CloudWeeklyBoss(ref.id,
+                    snap.getTimestamp("week")?.toDate()?.toInstant()?.atZone(ZoneOffset.UTC)?.toLocalDate(),
+                    plans(snap), snap.getTimestamp("claimedAt") != null, true)
             }
-            val tasks = snap?.documents.orEmpty().mapNotNull { doc ->
-                val activity = CloudBossActivity.entries.firstOrNull { it.key == doc.getString("activity") }
-                    ?: return@mapNotNull null
-                val uid = doc.getString("uid") ?: return@mapNotNull null
-                val round = doc.getTimestamp("round")?.toDate() ?: return@mapNotNull null
-                val baseline = doc.getLong("baseline")?.toInt() ?: return@mapNotNull null
-                val target = doc.getLong("target")?.toInt() ?: return@mapNotNull null
-                CloudBossTask(uid, activity, baseline, target, round)
-            }
-            bossTasks = CloudBossTaskView(ref.id, tasks, true)
         }
     }
 
-    suspend fun setBossTask(c: Context, activity: CloudBossActivity, target: Int): String = withContext(Dispatchers.IO) {
-        if (!active(c)) return@withContext "Nem vagy csapattag."
-        try {
-            val uid = ensureAuth()
-            val group = teamRef(c)
-            val assignment = group.collection("bossTasks").document("${uid}_${activity.key}")
-            if (target == 0) {
-                assignment.delete().await()
-                return@withContext "Vállalás visszavonva."
-            }
-            syncProfile(c)
-            val saved = db().runTransaction { tx ->
-                val snap = tx.get(group)
-                val old = tx.get(assignment)
-                val members = snap.get("members") as? Map<*, *> ?: return@runTransaction false
-                val member = members[uid] as? Map<*, *> ?: return@runTransaction false
-                if (target !in 1..(members.size * activity.goalPerMember)) return@runTransaction false
-                val round = snap.getTimestamp("bossClaimedAt") ?: return@runTransaction false
-                val baseline = if (old.getTimestamp("round") == round) old.getLong("baseline")
-                    else (member[activity.key] as? Number)?.toLong()
-                tx.set(assignment, mapOf("uid" to uid, "activity" to activity.key, "round" to round,
-                    "baseline" to (baseline ?: 0L), "target" to target,
-                    "updatedAt" to FieldValue.serverTimestamp()))
-                true
-            }.await()
-            if (saved) "Vállalás mentve." else "Adj meg a közös célnál kisebb pozitív vállalást."
-        } catch (e: FirebaseFirestoreException) {
-            if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                "A vállalásokhoz a csapat új Firebase-szabályai szükségesek."
-            } else "A vállalást most nem sikerült szinkronizálni."
-        } catch (_: Exception) {
-            "A vállalást most nem sikerült menteni."
-        }
+    internal fun refreshWeeklyBoss(c: Context) {
+        if (!active(c)) return
+        if (listenerId == teamId(c)) watchWeeklyBoss(teamRef(c)) else start(c)
     }
+
+    private suspend fun writeBossPlan(c: Context, requested: List<BossGoal>?): Boolean {
+        val account = ensureAuth()
+        val group = teamRef(c)
+        val ref = weekly(group)
+        val week = teamBossWeek()
+        val timestamp = weekTimestamp(week)
+        return db().runTransaction { tx ->
+            val groupData = tx.get(group)
+            val previous = tx.get(ref)
+            val members = groupData.get("members") as? Map<*, *> ?: return@runTransaction false
+            if (account !in members) return@runTransaction false
+            val sameWeek = previous.getTimestamp("week") == timestamp
+            if (sameWeek && previous.getTimestamp("claimedAt") != null) return@runTransaction false
+            val old = if (sameWeek) plans(previous)[account].orEmpty() else emptyList()
+            val selected = requested ?: old.map { it.goal }
+            if (!BossQuest.valid(selected)) return@runTransaction false
+            val lines = selected.map { goal ->
+                val persisted = old.firstOrNull { it.goal.activity.key == goal.activity.key }?.done ?: 0
+                BossLine(goal, minOf(goal.target, maxOf(persisted, BossProgress.count(c, goal.activity, week))))
+            }
+            if (lines == old) return@runTransaction true
+            val encoded = lines.map { line ->
+                val item = line.goal.activity
+                mapOf("activity" to item.key, "title" to item.title, "unit" to item.unit.key,
+                    "session" to item.session, "target" to line.goal.target, "done" to line.done)
+            }
+            val allDone = lines.all { it.done >= it.goal.target }
+            if (sameWeek) {
+                tx.update(ref, mapOf("plans.$account" to encoded,
+                    "ready.$account" to (if (allDone) true else FieldValue.delete())))
+            } else {
+                tx.set(ref, mapOf("week" to timestamp, "plans" to mapOf(account to encoded),
+                    "ready" to (if (allDone) mapOf(account to true) else emptyMap<String, Boolean>()),
+                    "claimedAt" to null))
+            }
+            true
+        }.await()
+    }
+
+    private fun bossError(error: Exception): String =
+        if (error is FirebaseFirestoreException && error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
+            "A közös heti célokhoz közzé kell tenni az új Firebase-szabályokat."
+        else "A heti Boss Fight most nem szinkronizálható."
+
+    internal suspend fun saveWeeklyBoss(c: Context, goals: List<BossGoal>): String = withContext(Dispatchers.IO) {
+        if (!active(c) || !BossQuest.valid(goals)) return@withContext "Válassz három különböző célt."
+        try {
+            if (writeBossPlan(c, goals)) "A három heti cél mentve."
+            else "A csapat erre a hétre már felvette a jutalmat."
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) { bossError(error) }
+    }
+
+    internal suspend fun syncBossProgress(c: Context): String? = withContext(Dispatchers.IO) {
+        if (!active(c)) return@withContext null
+        try {
+            val current = weeklyBoss
+            if (current.teamId != teamId(c) || current.week != teamBossWeek() || current.claimed ||
+                currentUid() !in current.plans) return@withContext null
+            if (writeBossPlan(c, null)) null else "A heti célok haladása még nem menthető."
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) { bossError(error) }
+    }
+
     private fun todayUtc():Timestamp {
         val start=LocalDate.now(ZoneOffset.UTC).atStartOfDay(ZoneOffset.UTC).toInstant()
         return Timestamp(Date.from(start))
@@ -386,7 +426,7 @@ object CloudTeams {
                 if(id.isNotBlank() && listenerId!=id) {
                     listener?.remove()
                     listenerId=id
-                    watchBossTasks(teamRef(app))
+                    watchWeeklyBoss(teamRef(app))
                     listener=teamRef(app).addSnapshotListener { snap,err ->
                         if(err!=null) {
                             status="Szinkronhiba: "+(err.localizedMessage ?: "nincs hozzáférés")
@@ -413,12 +453,6 @@ object CloudTeams {
                                 id=snap.id,name=data["name"]?.toString()?:"Csapat",
                                 pool=num("pool"),bank=num("bank"),
                                 members=people,
-                                push=num("bossPush"),chess=num("bossChess"),
-                                study=num("bossStudy"),
-                                targetPush=num("bossTargetPush"),
-                                targetChess=num("bossTargetChess"),
-                                targetStudy=num("bossTargetStudy"),
-                                bossClaimed=(data["bossClaimedAt"] as? Timestamp)?.toDate(),
                                 syncedAt=System.currentTimeMillis(),
                                 cached=snap.metadata.isFromCache,
                                 lastBankEvent=snap.getString("lastBankEvent").orEmpty()
@@ -447,7 +481,10 @@ object CloudTeams {
         }
         if(force || now-lastOwn>90000L) {
             lastOwn=now
-            io.launch{syncProfile(c.applicationContext)}
+            io.launch {
+                syncProfile(c.applicationContext)
+                syncBossProgress(c.applicationContext)
+            }
         }
         if(force || now-lastReward>45000L) {
             lastReward=now
@@ -723,36 +760,39 @@ object CloudTeams {
             }catch(e:Exception){"Átvezetési hiba: "+(e.localizedMessage?:"Firebase-hiba")}
         }
 
-    suspend fun claimBoss(c:Context):String=withContext(Dispatchers.IO) {
-        if(!active(c))return@withContext "Nem vagy csapattag."
+    suspend fun claimBoss(c: Context): String = withContext(Dispatchers.IO) {
+        if (!active(c)) return@withContext "Nem vagy csapattag."
         try {
             val uid = ensureAuth()
             val ref = teamRef(c)
+            val weekDoc = weekly(ref)
+            val timestamp = weekTimestamp(teamBossWeek())
             val eventId = bankEventId(uid)
-            val won = bankTransaction(ref) { tx, journal ->
-                val snap=tx.get(ref)
-                val members=snap.get("members") as? Map<*,*> ?:return@bankTransaction false
-                fun v(k:String)=snap.getLong(k)?:0L
-                if(v("bossPush")<v("bossTargetPush") ||
-                    v("bossChess")<v("bossTargetChess") ||
-                    v("bossStudy")<v("bossTargetStudy"))return@bankTransaction false
-                val prior=snap.getTimestamp("bossClaimedAt")?.toDate()?.time?:0L
-                if(System.currentTimeMillis()-prior<7*86400000L)return@bankTransaction false
-                val reward=members.size.toLong()*900L
-                if(v("pool")+reward>MAX_POOL)return@bankTransaction false
-                updateBank(tx, snap, mapOf(
-                    "pool" to v("pool")+reward,
-                    "bossClaimedAt" to FieldValue.serverTimestamp(),
-                    "bossTargetPush" to v("bossPush")+members.size*100L,
-                    "bossTargetChess" to v("bossChess")+members.size*10L,
-                    "bossTargetStudy" to v("bossStudy")+members.size*10800L
-                ), journal, "boss", uid, eventId)
-                true
-            }
-            if(won)"🏆 Boss Fight teljesítve! A csapat jutalma jóváírva."
-            else "Még nincs teljesítve, 7 nap még nem telt el, vagy tele van a keret."
-        }catch(e:Exception){"Boss Fight hiba: "+(e.localizedMessage?:"nincs hozzáférés")}
+            val received = db().runTransaction { tx ->
+                val team = tx.get(ref)
+                val week = tx.get(weekDoc)
+                val members = team.get("members") as? Map<*, *> ?: return@runTransaction 0L
+                val done = week.get("ready") as? Map<*, *> ?: return@runTransaction 0L
+                val pool = team.getLong("pool") ?: 0L
+                if (uid !in members || week.getTimestamp("week") != timestamp ||
+                    week.getTimestamp("claimedAt") != null || members.keys.any { done[it] != true } ||
+                    team.getTimestamp("bossClaimedAt")?.let { it >= timestamp } == true) {
+                    return@runTransaction 0L
+                }
+                val reward = members.size * 1800L
+                if (reward <= 0 || pool + reward > MAX_POOL) return@runTransaction 0L
+                tx.update(weekDoc, "claimedAt", FieldValue.serverTimestamp())
+                updateBank(tx, team, mapOf("pool" to pool + reward, "bossClaimedAt" to FieldValue.serverTimestamp()),
+                    true, "boss", uid, eventId)
+                reward
+            }.await()
+            if (received > 0) "Jóváírva: ${duration(received.toInt())} a közös kerethez."
+            else "A csapat céljai még nem készültek el, a jutalom már jóvá van írva, vagy megtelt a keret."
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) { bossError(error) }
     }
+
     suspend fun removeMember(c:Context,id:String):String=withContext(Dispatchers.IO) {
         try {
             val uid=ensureAuth()
@@ -786,9 +826,9 @@ object CloudTeams {
     @Synchronized fun clear(c:Context) {
         leaseRetryAt = 0L
         listener?.remove();listener=null;listenerId=""
-        bossTaskListener?.remove()
-        bossTaskListener = null
-        bossTasks = CloudBossTaskView()
+        weeklyBossListener?.remove()
+        weeklyBossListener = null
+        weeklyBoss = CloudWeeklyBoss()
         prefs(c).edit().remove("teamId").remove("teamName").remove("key")
             .remove("owner").putInt("lease",0).putString("pending","[]").commit()
         view=CloudTeamView()

@@ -140,68 +140,6 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
     return lines
 }
 
-@Composable private fun BossCommitments(state: CloudTeamView) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val sync = CloudTeams.bossTasks
-    val currentRound = state.bossClaimed ?: return
-    val uid = CloudTeams.currentUid()
-    var selected by remember(state.id) { mutableStateOf<CloudBossActivity?>(null) }
-    var amount by remember(state.id) { mutableStateOf("") }
-    var response by remember(state.id) { mutableStateOf("") }
-    var pending by remember(state.id) { mutableStateOf(false) }
-    Text("Személyes vállalások", color = CP, fontWeight = FontWeight.Bold)
-    if (sync.teamId != state.id || sync.available != true) {
-        Text(if (sync.available == false) "A vállalásokhoz kapcsolat és az új Firebase-szabályok szükségesek."
-            else "Vállalások betöltése…", color = CM, fontSize = 12.sp)
-        return
-    }
-
-    val current = sync.tasks.filter { it.round == currentRound && state.members.any { m -> m.uid == it.uid } }
-    if (current.isEmpty()) Text("Még senki sem vállalt részt ebben a körben.", color = CM, fontSize = 12.sp)
-    for (task in current.sortedWith(compareBy({ it.activity.ordinal }, { it.uid }))) {
-        val member = state.members.firstOrNull { it.uid == task.uid } ?: continue
-        val done = (task.activity.count(member) - task.baseline).coerceIn(0, task.target)
-        Text("${member.name} · ${task.activity.label}", color = CW, fontSize = 13.sp)
-        Text("${task.activity.display(done)} / ${task.activity.display(task.target)} · hátra ${task.activity.display(task.target - done)}",
-            color = if (done == task.target) CP else CM, fontSize = 12.sp)
-    }
-    for (type in CloudBossActivity.entries) {
-        FilterChip(selected = selected == type, enabled = !pending, onClick = {
-            selected = type
-            val own = current.firstOrNull { it.uid == uid && it.activity == type }
-            amount = own?.let { (if (type == CloudBossActivity.STUDY) it.target / 60 else it.target).toString() }.orEmpty()
-        }, label = { Text(type.label) })
-    }
-    selected?.let { type ->
-        val units = if (type == CloudBossActivity.STUDY) 60 else 1
-        val max = state.members.size * type.goalPerMember / units
-        val valid = amount.toIntOrNull()?.takeIf { it in 1..max }
-        OutlinedTextField(value = amount, onValueChange = { amount = it.filter(Char::isDigit).take(5) },
-            label = { Text(if (units == 60) "Vállalt perc (1–$max)" else "Vállalt darab (1–$max)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        Button(enabled = valid != null && !pending, onClick = {
-            pending = true
-            scope.launch {
-                response = CloudTeams.setBossTask(context, type, (valid ?: 0) * units)
-                pending = false
-            }
-        }) { Text("Vállalás mentése") }
-        if (current.any { it.uid == uid && it.activity == type }) {
-            OutlinedButton(enabled = !pending, onClick = {
-                pending = true
-                scope.launch {
-                    response = CloudTeams.setBossTask(context, type, 0)
-                    amount = ""
-                    pending = false
-                }
-            }) { Text("Visszavonás") }
-        }
-    }
-    if (response.isNotBlank()) Text(response, color = CM, fontSize = 12.sp)
-}
-
 @Composable fun CloudTeamPanel(){
     val ctx=LocalContext.current
     val scope=rememberCoroutineScope()
@@ -364,38 +302,8 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
                 Text("Csak virtuális időt mozgatunk. A személyes egyenleg a telefonon tárolódik, ezért a felajánlás az alkalmazás használói közötti bizalmon alapul.",
                     color=CM,fontSize=11.sp)
             }
-            CloudBox("👑 CSAPAT BOSS FIGHT"){
-                val n=state.members.size.coerceAtLeast(1)
-                Text("Minden tag eredménye összeadódik. Cél: 100 fekvő, 10 sakkparti és 3 óra tanulás tagonként.",
-                    color=CM,fontSize=12.sp)
-                listOf(Triple("Fekvőtámasz",state.push to state.targetPush,100*n),
-                    Triple("Sakkparti",state.chess to state.targetChess,10*n),
-                    Triple("Tanulás",state.study to state.targetStudy,10800*n))
-                    .forEach{item->
-                        val remainingGoal=item.third
-                        val done=(item.second.first-(item.second.second-remainingGoal)).coerceAtLeast(0)
-                        Row {
-                            Text(item.first,color=CW,modifier=Modifier.weight(1f))
-                            Text(if(item.first=="Tanulás")duration(done)+" / "+duration(remainingGoal)
-                                else "$done / $remainingGoal",color=CP,fontSize=12.sp)
-                        }
-                        LinearProgressIndicator(progress={
-                            (done.toFloat()/remainingGoal.coerceAtLeast(1)).coerceIn(0f,1f)
-                        },modifier=Modifier.fillMaxWidth().height(8.dp),color=CP,
-                            trackColor=Color(0xFF40526B))
-                    }
-                val ready=state.push>=state.targetPush&&state.chess>=state.targetChess&&
-                    state.study>=state.targetStudy
-                val cooldown=state.bossClaimed!=null &&
-                    System.currentTimeMillis()-state.bossClaimed.time<7L*86400000L
-                Button(onClick={busy=true;scope.launch{
-                    message=CloudTeams.claimBoss(ctx);busy=false;tick++
-                }},enabled=ready&&!cooldown&&!busy,
-                    modifier=Modifier.fillMaxWidth()){
-                    Text(if(cooldown)"ÚJ BOSS 7 NAP MÚLVA"
-                         else "BOSS JUTALOM: +"+duration(n*900))
-                }
-                BossCommitments(state)
+            CloudBox("👑 CSAPAT BOSS FIGHT") {
+                WeeklyTeamBossPanel(state)
             }
             CloudBox("👤 CSAPATTAGOK · "+state.members.size){
                 for(member in state.members){

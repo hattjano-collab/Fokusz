@@ -301,7 +301,8 @@ object QuestStore {
         val q = current(c) ?: return false
         if (q.id != id || (q.kind != QuestKind.PUSHUPS && q.kind != QuestKind.EXERCISE) || phase(c) != 0) return false
         val n = (reps(c) + 1).coerceAtMost(q.goal)
-        sp(c).edit().putInt("reps", n).commit()
+        if (!sp(c).edit().putInt("reps", n).commit()) return false
+        BossActivities.forQuest(q, null)?.let { BossProgress.add(c, it, 1) }
         return if (n == q.goal) finish(c, q.reward, "Mozgásos feladat teljesítve: +" + duration(q.reward)) else false
     }
 
@@ -407,6 +408,11 @@ object QuestStore {
         if (phase(c) == 2) return false
         val a = active(c)
         val q = current(c)
+        val baseChoice = when (a) {
+            CHESS -> sp(c).getInt("base0", -1)
+            PUSH -> sp(c).getInt("base1", -1)
+            else -> null
+        }
         val e = sp(c).edit()
             .putInt("phase", 2)
             .putInt("completed", completed(c) + 1)
@@ -423,7 +429,10 @@ object QuestStore {
                 e.putLong("templateSeconds_$templateId", templateSeconds(c, templateId) + q.goal)
             }
         }
-        e.commit()
+        if (!e.commit()) return false
+        if (q?.kind == QuestKind.TIMED) {
+            BossActivities.forQuest(q, baseChoice)?.let { BossProgress.add(c, it, q.goal) }
+        }
         val adjustedReward = if (FocusPrefs.focusLocked(c) &&
             q?.mode in setOf("pushups","squats","plank") &&
             q?.kind in setOf(QuestKind.PUSHUPS,QuestKind.EXERCISE)) reward*2

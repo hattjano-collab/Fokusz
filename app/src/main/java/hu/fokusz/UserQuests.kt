@@ -4,10 +4,11 @@ import android.content.Context
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 import java.util.UUID
 
 internal data class UserQuest(val id: String, val title: String, val seconds: Int, val reward: Int)
-internal data class UserQuestRun(val id: String, val quest: UserQuest, val left: Int)
+internal data class UserQuestRun(val id: String, val quest: UserQuest, val left: Int, val bossActivity: String?)
 
 internal object UserQuests {
     private fun prefs(c: Context) = c.getSharedPreferences("fokusz_user_quests", Context.MODE_PRIVATE)
@@ -44,7 +45,7 @@ internal object UserQuests {
             val quest = decode(JSONObject(saved))
             val elapsed = p.getLong("elapsed", 0)
             val left = ((quest.seconds * 1000L - elapsed).coerceAtLeast(0L) + 999L).div(1000L).toInt()
-            UserQuestRun(p.getString("runId", "").orEmpty(), quest, left)
+            UserQuestRun(p.getString("runId", "").orEmpty(), quest, left, p.getString("bossActivity", null))
         }.getOrNull()
     }
 
@@ -52,13 +53,22 @@ internal object UserQuests {
     fun subjectApps(c: Context): Set<String> = prefs(c).getStringSet("subjectApps", emptySet()).orEmpty()
 
     fun start(c: Context, id: String): Boolean {
+        val quest = all(c).firstOrNull { it.id == id } ?: return false
+        return begin(c, quest, null)
+    }
+
+    fun startBoss(c: Context, activity: BossActivity, minutes: Int): Boolean {
+        if (activity.unit != BossUnit.MINUTES || minutes !in 1..1440) return false
+        return begin(c, UserQuest(activity.key, activity.title, minutes * 60, 0), activity.key)
+    }
+
+    private fun begin(c: Context, quest: UserQuest, activity: String?): Boolean {
         if (FocusPrefs.focusLocked(c) || QuestStore.isTimerLocked(c)) return false
         return synchronized(this) {
             if (pending(c)) return@synchronized false
-            val quest = all(c).firstOrNull { it.id == id } ?: return@synchronized false
             prefs(c).edit().putString("run", encode(quest).toString())
                 .putString("runId", UUID.randomUUID().toString()).putLong("elapsed", 0)
-                .putLong("clock", SystemClock.elapsedRealtime())
+                .putLong("clock", SystemClock.elapsedRealtime()).putString("bossActivity", activity)
                 .putStringSet("subjectApps", FocusPrefs.selectedSubject(c).packages).commit()
         }
     }
@@ -76,7 +86,9 @@ internal object UserQuests {
         val now = SystemClock.elapsedRealtime()
         val last = p.getLong("clock", now)
         val elapsed = p.getLong("elapsed", 0) + (now - last).coerceIn(0L, 1500L)
-        p.edit().putLong("clock", now).putLong("elapsed", elapsed).apply()
+        val edit = p.edit().putLong("clock", now).putLong("elapsed", elapsed)
+        if (elapsed >= running.quest.seconds * 1000L) edit.putString("completedDay", LocalDate.now().toString())
+        edit.apply()
     }
 
     @Synchronized
@@ -86,15 +98,18 @@ internal object UserQuests {
     }
 
     private fun clear(c: Context) = prefs(c).edit().remove("run").remove("runId")
-        .remove("clock").remove("elapsed").remove("subjectApps").commit()
+        .remove("clock").remove("elapsed").remove("completedDay").remove("subjectApps").remove("bossActivity").commit()
 
     @Synchronized
     fun claim(c: Context): Int? {
         val run = active(c) ?: return null
         if (run.left != 0 || run.id.isBlank()) return null
         val credited = Store.creditUserQuest(c, run.id, run.quest.reward) ?: return null
+        val completed = prefs(c).getString("completedDay", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        BossProgress.add(c, run.bossActivity ?: "custom_${run.quest.id}", run.quest.seconds, run.id,
+            completed ?: LocalDate.now())
         ProgressStore.taskFinished(c, "OTHER", run.quest.seconds, credited, title = run.quest.title,
-            receipt = "custom_${run.id}")
+            receipt = "custom_${run.id}", shareWithTeam = run.bossActivity == null)
         clear(c)
         return credited
     }

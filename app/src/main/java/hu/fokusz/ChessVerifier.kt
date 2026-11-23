@@ -137,9 +137,12 @@ object ChessVerifier {
 
     fun weekGames(c: Context): Int {
         val today = LocalDate.now()
-        return (0 until today.dayOfWeek.value).sumOf { offset ->
-            scores(c).getInt("day_" + today.minusDays(offset.toLong()), 0)
-        }
+        return gamesSince(c, monday(today), today.dayOfWeek.value)
+    }
+
+    internal fun gamesSince(c: Context, start: LocalDate, days: Int): Int {
+        val p = scores(c)
+        return (0 until days).sumOf { p.getInt("day_" + start.plusDays(it.toLong()), 0) }
     }
 
     private fun request(

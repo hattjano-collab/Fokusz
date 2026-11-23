@@ -53,35 +53,12 @@ private val SUB=Color(0xFFA7B4CC)
     var refresh by remember { mutableIntStateOf(0) }
     var showChessHistory by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(4000); refresh++ } }
-    val (reps,chess,study)=remember(refresh) { BossQuest.progress(c) }
     val days=ProgressStore.recent(c)
     val used=days.sumOf { it.usage }
     val estimate=(7*Store.DAILY-used).coerceAtLeast(0)
     Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
-        FeatureBox("👑 HETI BOSS QUEST") {
-            Text("Teljesítsd mindhárom célt egy naptári héten. Jutalom: +15 perc és Boss-jelvény.",
-                color=SUB,fontSize=12.sp)
-            val goals=listOf(
-                Triple("Fekvőtámasz",reps,100),
-                Triple("Befejezett sakkmeccs",chess,10),
-                Triple("Tanulás másodpercben",study,10800)
-            )
-            for((label,value,target) in goals) {
-                Row {
-                    Text(label,modifier=Modifier.weight(1f),color=FG,fontSize=12.sp)
-                    Text(if(target>=3600) duration(value)+"/3 óra" else
-                        value.toString()+"/"+target,color=GREEN,fontSize=12.sp)
-                }
-                LinearProgressIndicator(progress={(value.toFloat()/target).coerceIn(0f,1f)},
-                    modifier=Modifier.fillMaxWidth().height(8.dp),
-                    color=GREEN,trackColor=Color(0xFF32415C))
-            }
-            if(BossQuest.claimed(c)) Text("🏅 Heti Boss legyőzve!",color=GREEN,
-                fontWeight=FontWeight.Bold)
-            else Button(onClick={if(BossQuest.claim(c))refresh++},
-                enabled=BossQuest.ready(c),modifier=Modifier.fillMaxWidth(),
-                colors=ButtonDefaults.buttonColors(containerColor=GREEN,
-                    contentColor=Color(0xFF0B1020))) {Text("BOSS JUTALOM FELVÉTELE")}
+        FeatureBox("HETI SZEMÉLYES BOSS FIGHT") {
+            PersonalBossPanel()
         }
         FeatureBox("♟️ SAKKSTATISZTIKA") {
             val w=ChessVerifier.wins(c)

@@ -2,7 +2,6 @@ package hu.fokusz
 
 import android.content.Context
 import java.time.LocalDate
-import java.time.temporal.WeekFields
 
 internal data class TimeBankState(val day: LocalDate, val ready: Int, val pending: Int, val interest: Int) {
     fun addRemainder(seconds: Int): TimeBankState = copy(
@@ -58,29 +57,4 @@ object TimeBank {
     fun projectedInterest(c: Context): Int = projection(c).interest
     fun deposit(c: Context, seconds: Int): Boolean = Store.transferBank(c, seconds, deposit = true)
     fun withdraw(c: Context, seconds: Int): Boolean = Store.transferBank(c, seconds, deposit = false)
-}
-
-/** Heti főkihívás: a megadott célokat mind teljesíteni kell. */
-object BossQuest {
-    private fun sp(c:Context)=c.getSharedPreferences("fokusz_boss_v1",0)
-    private fun weekKey():String {
-        val d=LocalDate.now()
-        val week=WeekFields.ISO
-        return d.get(week.weekBasedYear()).toString()+"-"+d.get(week.weekOfWeekBasedYear())
-    }
-    fun progress(c:Context):Triple<Int,Int,Int> =
-        Triple(ProgressStore.weekPushups(c),ChessVerifier.weekGames(c),ProgressStore.weekStudy(c))
-    fun ready(c:Context):Boolean {
-        val (reps,chess,study)=progress(c)
-        return reps>=100 && chess>=10 && study>=10800 && sp(c).getString("claimed","")!=weekKey()
-    }
-    @Synchronized fun claim(c:Context):Boolean {
-        if(!ready(c))return false
-        sp(c).edit().putString("claimed",weekKey()).commit()
-        val credited = Store.credit(c, 900, "Heti főkihívás jutalma")
-        ProgressStore.earned(c, credited)
-        ProgressStore.awardXp(c, 100, "boss_${weekKey()}")
-        return true
-    }
-    fun claimed(c:Context):Boolean=sp(c).getString("claimed","")==weekKey()
 }

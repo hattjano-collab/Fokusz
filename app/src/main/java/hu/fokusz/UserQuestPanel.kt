@@ -44,7 +44,8 @@ import kotlinx.coroutines.delay
             running?.let { run ->
                 Text(run.quest.title, style = MaterialTheme.typography.titleMedium)
                 if (run.left > 0) {
-                    Text("Hátra: ${clock(run.left)} · Jutalom: ${duration(run.quest.reward)}")
+                    Text("Hátra: ${clock(run.left)}" + if (run.bossActivity != null) " · Heti Boss-cél"
+                        else " · Jutalom: ${duration(run.quest.reward)}")
                     if (!serviceReady) Text("Az óra a háttérvédelem elindítása után folytatódik.")
                     TextButton(onClick = { cancel = true }) { Text("Quest megszakítása") }
                 } else Button(onClick = {
@@ -52,7 +53,7 @@ import kotlinx.coroutines.delay
                     message = if (credited == null) "A jutalom mentése nem sikerült."
                         else "Teljesítve. Jóváírva: ${duration(credited)}."
                     running = UserQuests.active(context)
-                }) { Text("Jutalom felvétele") }
+                }) { Text(if (run.bossActivity != null) "Haladás rögzítése" else "Jutalom felvétele") }
             }
             if (message.isNotBlank()) Text(message)
             OutlinedButton(onClick = { expanded = !expanded }) {

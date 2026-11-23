@@ -17,6 +17,14 @@ service cloud.firestore {
     function quotaPath(team, uid) {
       return /databases/$(database)/documents/teams/$(team)/dailyUsage/$(uid);
     }
+    function weeklyBossPath(team) {
+      return /databases/$(database)/documents/teams/$(team)/weeklyBoss/current;
+    }
+    function activeBossWeek(week) {
+      return week is timestamp && week == week.date()
+        && week.toMillis() % 604800000 == 345600000
+        && week <= request.time.date() && request.time.date() < week + duration.value(7,'d');
+    }
     function validBankRecord(team, eventId, kind) {
       return eventId is string && eventId.size() >= 20 && eventId.size() <= 160
         && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
@@ -184,20 +192,20 @@ service cloud.firestore {
     }
     function validBossReward(team) {
       let n = resource.data.members.keys().size();
+      let path = weeklyBossPath(team);
+      let before = get(path).data;
+      let after = getAfter(path).data;
       return request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['pool','bossClaimedAt','bossTargetPush',
-               'bossTargetChess','bossTargetStudy','lastBankEvent'])
-        && resource.data.bossPush >= resource.data.bossTargetPush
-        && resource.data.bossChess >= resource.data.bossTargetChess
-        && resource.data.bossStudy >= resource.data.bossTargetStudy
-        && resource.data.bossClaimedAt + duration.value(7,'d') <= request.time
+             .hasOnly(['pool','bossClaimedAt','lastBankEvent'])
+        && activeBossWeek(before.week)
+        && resource.data.bossClaimedAt < before.week
+        && before.claimedAt == null && after.claimedAt == request.time
+        && before.ready.keys().hasAll(resource.data.members.keys())
+        && after.diff(before).affectedKeys().hasOnly(['claimedAt'])
         && request.resource.data.bossClaimedAt == request.time
-        && request.resource.data.pool == resource.data.pool + n * 900
+        && request.resource.data.pool == resource.data.pool + n * 1800
         && request.resource.data.pool <= 2000000000
-        && request.resource.data.bossTargetPush == resource.data.bossPush + n * 100
-        && request.resource.data.bossTargetChess == resource.data.bossChess + n * 10
-        && request.resource.data.bossTargetStudy == resource.data.bossStudy + n * 10800
-        && compatibleBankRecord(team,'boss');
+        && validBankRecord(team, request.resource.data.get('lastBankEvent',''), 'boss');
     }
     function validMemberRemoval() {
       let uid = request.auth.uid;
@@ -343,6 +351,61 @@ service cloud.firestore {
             && task.baseline is int && task.baseline ==
                (previous != null && previous.round == task.round
                 ? previous.baseline : team.members[uid][task.activity]);
+        }
+      }
+
+      match /weeklyBoss/current {
+        allow read: if signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+        allow create: if signedIn() && validPlans(null);
+        allow update: if signedIn() && (request.resource.data.claimedAt == null
+          ? validPlans(resource.data) : validClaim());
+        allow delete: if false;
+
+        function validGoal(goal) {
+          let keys = ['activity','title','unit','session','target','done'];
+          return goal is map && goal.keys().hasAll(keys) && goal.keys().hasOnly(keys)
+            && goal.activity is string && goal.activity.matches('[a-z0-9_-]{1,80}')
+            && goal.title is string && goal.title.size() >= 1 && goal.title.size() <= 80
+            && goal.unit in ['minute','second','rep','game']
+            && goal.session is int && (goal.unit == 'minute'
+              ? (goal.session >= 1 && goal.session <= 1440) : goal.session == 0)
+            && goal.target is int && goal.target >= 1 && goal.target <= 100000
+            && goal.done is int && goal.done >= 0 && goal.done <= goal.target;
+        }
+
+        function validPlans(previous) {
+          let uid = request.auth.uid;
+          let team = get(teamPath(teamId)).data;
+          let next = request.resource.data;
+          let same = previous != null && previous.week == next.week;
+          let keys = ['week','plans','ready','claimedAt'];
+          let goals = next.plans[uid];
+          return uid in team.members && next.keys().hasAll(keys) && next.keys().hasOnly(keys)
+            && activeBossWeek(next.week) && next.claimedAt == null
+            && next.plans is map && next.ready is map
+            && goals is list && goals.size() == 3
+            && validGoal(goals[0]) && validGoal(goals[1]) && validGoal(goals[2])
+            && [goals[0].activity, goals[1].activity, goals[2].activity].toSet().size() == 3
+            && (uid in next.ready) == (goals[0].done == goals[0].target
+              && goals[1].done == goals[1].target && goals[2].done == goals[2].target)
+            && (!(uid in next.ready) || next.ready[uid] == true)
+            && (same ? (previous.claimedAt == null
+              && next.plans.diff(previous.plans).affectedKeys().hasOnly([uid])
+              && next.ready.diff(previous.ready).affectedKeys().hasOnly([uid]))
+            : ((previous == null || next.week >= previous.week + duration.value(7,'d'))
+              && next.plans.keys().hasOnly([uid]) && next.ready.keys().hasOnly([uid])));
+        }
+
+        function validClaim() {
+          let team = get(teamPath(teamId)).data;
+          let afterTeam = getAfter(teamPath(teamId)).data;
+          let next = request.resource.data;
+          return request.auth.uid in team.members && activeBossWeek(resource.data.week)
+            && resource.data.claimedAt == null && next.claimedAt == request.time
+            && next.diff(resource.data).affectedKeys().hasOnly(['claimedAt'])
+            && resource.data.ready.keys().hasAll(team.members.keys())
+            && afterTeam.bossClaimedAt == request.time
+            && afterTeam.pool == team.pool + team.members.keys().size() * 1800;
         }
       }
     }

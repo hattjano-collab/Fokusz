@@ -200,6 +200,7 @@ object FocusPrefs {
         }
         if (!editor.commit()) return false
         val credited = Store.addStudyReward(c, target / 2, "Fókuszidő jutalma")
+        BossProgress.add(c, "quest_3", target)
         val title = if (subjectId.isEmpty()) "Mélyfókusz" else "Mélyfókusz · $subjectName"
         ProgressStore.taskFinished(c, "STUDY", target, credited, title = title)
         return true

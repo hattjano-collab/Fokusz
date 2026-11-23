@@ -83,43 +83,73 @@ try {
     bossPush:200,bossChess:20,bossStudy:21600
   }));
   console.log("PASS member achievements add safely to combined team Boss Fight");
-  await assertSucceeds(updateDoc(groupDoc,{
-    pool:3270,
-    bossClaimedAt:serverTimestamp(),
-    bossTargetPush:400,bossTargetChess:40,bossTargetStudy:43200
-  }));
-  await assertFails(updateDoc(groupDoc,{
-    pool:5070,
-    bossClaimedAt:serverTimestamp(),
-    bossTargetPush:600,bossTargetChess:60,bossTargetStudy:64800
-  }));
-  console.log("PASS combined Boss reward is collectible once with cooldown");
+  const monday=new Date(today.toMillis() - ((day.getUTCDay()+6)%7)*86400000);
+  const currentWeek=Timestamp.fromDate(monday);
+  const boss=doc(ownerDb,"teams",groupId,"weeklyBoss","current");
+  const guestBoss=doc(guestDb,"teams",groupId,"weeklyBoss","current");
+  const goal=(activity,title,unit,target,done,session=0)=>({activity,title,unit,target,done,session});
+  const ownerGoals=[goal("chess","Sakk","game",5,5),goal("quest_5","Séta","minute",30,30,25),
+    goal("pushups","Fekvőtámasz","rep",40,40)];
+  const guestGoals=[goal("quest_6","Olvasás","minute",40,25,15),goal("squats","Guggolás","rep",20,20),
+    goal("custom_example","Kísérlet","minute",20,20,10)];
+  const start={week:currentWeek,plans:{[owner]:ownerGoals},ready:{[owner]:true},claimedAt:null};
+  await assertFails(setDoc(boss,{...start,plans:{[owner]:ownerGoals.slice(0,2)}}));
+  await assertFails(setDoc(boss,{...start,plans:{[owner]:[ownerGoals[0],ownerGoals[0],ownerGoals[2]]}}));
+  await assertFails(setDoc(boss,{...start,week:Timestamp.fromMillis(currentWeek.toMillis()-86400000)}));
+  await assertSucceeds(setDoc(boss,start));
+  await assertFails(getDoc(doc(outsiderDb,"teams",groupId,"weeklyBoss","current")));
+  await assertFails(updateDoc(guestBoss,{["plans."+owner]:guestGoals}));
+  await assertFails(updateDoc(guestBoss,{["plans."+guest]:guestGoals,["ready."+guest]:true}));
+  await assertSucceeds(updateDoc(guestBoss,{["plans."+guest]:guestGoals}));
+  const rewardId=owner+"_boss-week-0000000001";
+  function claimBoss(reward){
+    const batch=writeBatch(ownerDb);
+    batch.update(groupDoc,{pool:1470+reward,bossClaimedAt:serverTimestamp(),lastBankEvent:rewardId});
+    batch.update(boss,{claimedAt:serverTimestamp()});
+    batch.set(doc(ownerDb,"teams",groupId,"bankEvents",rewardId),journal(owner,"boss",1470,0,1470+reward,0));
+    return batch.commit();
+  }
+  await assertFails(claimBoss(3600));
+  const guestDone=guestGoals.map(row=>({...row,done:row.target}));
+  await assertSucceeds(updateDoc(guestBoss,{["plans."+guest]:guestDone,["ready."+guest]:true}));
+  await environment.withSecurityRulesDisabled(async (admin) => {
+    await updateDoc(doc(admin.firestore(),"teams",groupId),{bossClaimedAt:currentWeek});
+  });
+  await assertFails(claimBoss(3600));
+  await environment.withSecurityRulesDisabled(async (admin) => {
+    await updateDoc(doc(admin.firestore(),"teams",groupId),{bossClaimedAt:Timestamp.fromMillis(0)});
+  });
+  await assertFails(claimBoss(1800));
+  await assertSucceeds(claimBoss(3600));
+  await assertFails(claimBoss(3600));
+  await assertFails(updateDoc(guestBoss,{claimedAt:null}));
+  console.log("PASS weekly boss needs all three goals from each member, pays 30 minutes per member and cannot repeat");
   const giftId=guest+"_c745bd6a-3d73-475a-9baf-00281b930121";
   const giftBatch=writeBatch(guestDb);
   giftBatch.update(guestDoc,{bank:90000,lastRewardEvent:giftId,lastBankEvent:giftId});
   giftBatch.set(doc(guestDb,"teams",groupId,"events",giftId),{
     uid:guest,amount:90000,createdAt:serverTimestamp()
   });
-  giftBatch.set(doc(guestDb,"teams",groupId,"bankEvents",giftId),journal(guest,"personal_bank",3270,0,3270,90000));
+  giftBatch.set(doc(guestDb,"teams",groupId,"bankEvents",giftId),journal(guest,"personal_bank",5070,0,5070,90000));
   await assertSucceeds(giftBatch.commit());
   console.log("PASS member can deposit more than 24 hours of virtual time into team bank");
   await assertFails(updateDoc(guestDoc,{bank:180000}));
   console.log("PASS bank cannot be increased without an idempotent matching receipt");
-  await assertSucceeds(updateDoc(groupDoc,{pool:2070,bank:91200}));
+  await assertSucceeds(updateDoc(groupDoc,{pool:3870,bank:91200}));
   console.log("PASS member can transfer pool minutes to bank without creating time");
-  await assertFails(updateDoc(groupDoc,{pool:2070,bank:94000}));
+  await assertFails(updateDoc(groupDoc,{pool:3870,bank:94000}));
   console.log("PASS pool-to-bank transfer cannot mint extra minutes");
 
   const usageId=owner+"_usage-000000000001";
   const usage=doc(ownerDb,"teams",groupId,"bankEvents",usageId);
-  await assertFails(updateDoc(groupDoc,{pool:2010,lastBankEvent:usageId}));
-  await assertFails(setDoc(usage,journal(owner,"usage",2070,91200,2010,91200)));
+  await assertFails(updateDoc(groupDoc,{pool:3810,lastBankEvent:usageId}));
+  await assertFails(setDoc(usage,journal(owner,"usage",3870,91200,3810,91200)));
   const forgedUsage=writeBatch(ownerDb);
-  forgedUsage.update(groupDoc,{pool:2010,lastBankEvent:usageId});
-  forgedUsage.set(usage,journal(owner,"usage",2070,91200,1900,91200));
+  forgedUsage.update(groupDoc,{pool:3810,lastBankEvent:usageId});
+  forgedUsage.set(usage,journal(owner,"usage",3870,91200,1900,91200));
   forgedUsage.set(doc(ownerDb,"teams",groupId,"dailyUsage",owner),{day:today,used:90});
   await assertFails(forgedUsage.commit());
-  await assertSucceeds(reserve(ownerDb,owner,usageId,2070,91200,60,90));
+  await assertSucceeds(reserve(ownerDb,owner,usageId,3870,91200,60,90));
   await assertSucceeds(getDoc(doc(guestDb,"teams",groupId,"bankEvents",usageId)));
   await assertFails(getDoc(doc(outsiderDb,"teams",groupId,"bankEvents",usageId)));
   await assertFails(deleteDoc(usage));
@@ -132,8 +162,8 @@ try {
   });
   const dailyId=owner+"_daily-000000000001";
   const daily=writeBatch(ownerDb);
-  daily.update(groupDoc,{lastDay:today,pool:1200,bank:102531,lastBankEvent:dailyId});
-  daily.set(doc(ownerDb,"teams",groupId,"bankEvents",dailyId),journal(owner,"daily",2010,91200,1200,102531));
+  daily.update(groupDoc,{lastDay:today,pool:1200,bank:104511,lastBankEvent:dailyId});
+  daily.set(doc(ownerDb,"teams",groupId,"bankEvents",dailyId),journal(owner,"daily",3810,91200,1200,104511));
   await assertSucceeds(daily.commit());
   console.log("PASS daily pool grant and bank interest can be journaled together");
 
@@ -144,10 +174,10 @@ try {
     const amount=Math.min(60,600-used);
     const pool=1200-(used-90);
     used+=amount;
-    await assertSucceeds(reserve(ownerDb,owner,owner+"_usage-quota-"+used,pool,102531,amount,used));
+    await assertSucceeds(reserve(ownerDb,owner,owner+"_usage-quota-"+used,pool,104511,amount,used));
   }
-  await assertFails(reserve(ownerDb,owner,owner+"_usage-quota-601",690,102531,1,601));
-  await assertSucceeds(reserve(guestDb,guest,guest+"_usage-quota-060",690,102531,60,60));
+  await assertFails(reserve(ownerDb,owner,owner+"_usage-quota-601",690,104511,1,601));
+  await assertSucceeds(reserve(guestDb,guest,guest+"_usage-quota-060",690,104511,60,60));
   console.log("PASS each Firebase identity can reserve at most half the daily group allowance");
 
   const round=(await getDoc(groupDoc)).data().bossClaimedAt;

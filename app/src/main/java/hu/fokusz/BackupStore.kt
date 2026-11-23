@@ -20,6 +20,7 @@ internal object BackupStore {
     private val practiceId = Regex("[0-9a-f]{64}:[1-9][0-9]{0,9}")
     private val chessReceipt = Regex("chess_reward_[cl]:[^\\s]{1,350}")
     private val studyReceipt = Regex("study_claim_[a-zA-Z0-9_-]{1,100}")
+    private val bossReceipt = Regex("user_quest_reward_personal_boss_[0-9]{4}-[0-9]{1,2}")
     private val username = Regex("[A-Za-z0-9_-]{2,25}")
     private val packageName = Regex("[A-Za-z0-9_.]{1,255}")
     private val attemptIdPattern = Regex("(?:[a-z0-9_-]{6,100})?")
@@ -61,6 +62,7 @@ internal object BackupStore {
             ),
             "fokusz_focus_v1" to mapOf("pastNotes" to jsonRows(100_000, ::validateFocusNote)),
             "fokusz_user_quests" to mapOf("quests" to jsonRows(10_000, ::validateUserQuest)),
+            "fokusz_boss_v1" to mapOf("goals" to jsonRows(3, ::validateBossGoal)),
             "fokusz_study_tools_v1" to mapOf(
                 "exams" to jsonRows(StudyToolsStore.MAX_ITEMS, ::validateStudyPlan),
                 "quizzes" to jsonRows(StudyToolsStore.MAX_ITEMS, ::validateQuizDeck),
@@ -111,6 +113,7 @@ internal object BackupStore {
             .put("installation", state.wallet.installation)
             .put("chessReceipts", JSONArray(state.chessReceipts))
             .put("studyReceipts", JSONArray(state.studyReceipts))
+            .put("bossReceipts", JSONArray(state.bossReceipts))
             .put("quizAttempts", state.quizAttempts)
         val document = JSONObject()
             .put("format", FORMAT)
@@ -157,6 +160,7 @@ internal object BackupStore {
             )
             val chess = stringSet(wallet.getJSONArray("chessReceipts"), 200_000, chessReceipt::matches)
             val study = stringSet(wallet.getJSONArray("studyReceipts"), 10_000, studyReceipt::matches)
+            val boss = stringSet(wallet.optJSONArray("bossReceipts") ?: JSONArray(), 10_000, bossReceipt::matches)
             val quiz = wallet.getJSONArray("quizAttempts").also {
                 validateRows(it, 100_000, ::validateAttempt)
             }
@@ -172,7 +176,7 @@ internal object BackupStore {
             val choices = settings.getValue("fokusz_daily_starters_v1")
             require(choices.values.all { it == null } ||
                 (choices.values.none { it == null } && choices.values.toSet().size == 2))
-            return Snapshot(id, issuedAt, Store.BackupWalletData(walletData, chess, study, quiz), settings)
+            return Snapshot(id, issuedAt, Store.BackupWalletData(walletData, chess, study, quiz, boss), settings)
         } catch (exception: Exception) {
             throw IllegalArgumentException(INVALID, exception)
         } catch (error: StackOverflowError) {
@@ -231,6 +235,16 @@ internal object BackupStore {
     }
 
     private fun bool() = Field { value -> value as Boolean }
+
+    private fun validateBossGoal(row: JSONObject): String {
+        val key = text(row.get("key"), 80)
+        require(key.matches(Regex("[a-z0-9_-]{1,80}")))
+        require(text(row.get("title"), 80).isNotBlank() && number(row.get("target")) in 1L..100_000L)
+        val unit = BossUnit.valueOf(row.getString("unit"))
+        val session = number(row.get("session"))
+        require(if (unit == BossUnit.MINUTES) session in 1L..1440L else session == 0L)
+        return key
+    }
 
     private fun validateUserQuest(row: JSONObject): String {
         val id = uuid(row.getString("id"))

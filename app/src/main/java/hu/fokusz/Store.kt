@@ -38,6 +38,7 @@ object Store {
     private const val QUIZ_ATTEMPTS = "quiz_attempts_v1"
     private const val CHESS_REWARD = "chess_reward_"
     private const val STUDY_CLAIM = "study_claim_"
+    private const val QUEST_RECEIPT = "user_quest_reward_"
 
     internal data class BackupWallet(
         val day: LocalDate,
@@ -50,7 +51,8 @@ object Store {
         val wallet: BackupWallet,
         val chessReceipts: Set<String>,
         val studyReceipts: Set<String>,
-        val quizAttempts: JSONArray
+        val quizAttempts: JSONArray,
+        val bossReceipts: Set<String> = emptySet()
     )
 
     @Synchronized internal fun walletBackup(c: Context): BackupWalletData {
@@ -73,7 +75,8 @@ object Store {
             wallet,
             saved.keys.filterTo(mutableSetOf()) { it.startsWith(CHESS_REWARD) },
             saved.keys.filterTo(mutableSetOf()) { it.startsWith(STUDY_CLAIM) && saved[it] == dayKey },
-            JSONArray(preferences.getString(QUIZ_ATTEMPTS, "[]") ?: "[]")
+            JSONArray(preferences.getString(QUIZ_ATTEMPTS, "[]") ?: "[]"),
+            saved.keys.filterTo(mutableSetOf()) { it.startsWith(QUEST_RECEIPT + "personal_boss_") }
         )
     }
 
@@ -94,6 +97,9 @@ object Store {
         editor.putString(QUIZ_ATTEMPTS, mergeQuizAttempts(localAttempts, backup.quizAttempts).toString())
         // A már jutalmazott eredmény az import után sem adhat jóvá újra időt.
         for (key in backup.chessReceipts) {
+            if (!preferences.contains(key)) editor.putInt(key, 0)
+        }
+        for (key in backup.bossReceipts) {
             if (!preferences.contains(key)) editor.putInt(key, 0)
         }
         val today = LocalDate.now()
@@ -156,16 +162,20 @@ object Store {
         return credited
     }
 
-    @Synchronized internal fun creditUserQuest(c: Context, runId: String, seconds: Int): Int? {
+    @Synchronized internal fun creditUserQuest(c: Context, runId: String, seconds: Int,
+                                              reason: String = "Saját quest jutalma"): Int? {
         val p = sp(c)
-        val receipt = "user_quest_reward_$runId"
+        val receipt = QUEST_RECEIPT + runId
         if (p.contains(receipt)) return p.getInt(receipt, 0)
         val old = bal(c)
         if (seconds !in 0..(MAX_SAFE_SECONDS - old)) return null
         if (!p.edit().putInt("b", old + seconds).putInt(receipt, seconds).commit()) return null
-        ScreenTimeLedger.record(c, "Saját quest jutalma", seconds)
+        ScreenTimeLedger.record(c, reason, seconds)
         return seconds
     }
+
+    internal fun hasPersonalBossReceipt(c: Context, week: String): Boolean =
+        sp(c).contains(QUEST_RECEIPT + "personal_boss_" + week)
 
     @Synchronized fun bal(c: Context): Int {
         val settings = sp(c)
