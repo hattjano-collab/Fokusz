@@ -3,6 +3,7 @@ package hu.fokusz
 import android.content.Context
 import android.os.SystemClock
 import java.security.SecureRandom
+import java.time.LocalDate
 
 enum class QuestKind { TIMED, PUSHUPS, EXERCISE, CHESS }
 
@@ -21,7 +22,7 @@ object QuestStore {
     private fun t(id: Int, title: String, detail: String, icon: String, minutes: Int, reward: Int) =
         Quest(id, title, detail, icon, QuestKind.TIMED, minutes * 60, reward * 60)
     private fun p(id: Int, title: String, count: Int, reward: Int) =
-        Quest(id, title, "Oldalról, teljes testtel a kamerában. Csak a szabályos, le-fel mozdulat számít.", "💪", QuestKind.PUSHUPS, count, reward * 60)
+        Quest(id, title, "Állítsd a kamerát oldalra úgy, hogy az egyik vállad, könyököd és csuklód jól látszódjon. Az ismétléshez engedd le, majd nyomd fel magad.", "💪", QuestKind.PUSHUPS, count, reward * 60)
 
     private fun e(id: Int, title: String, count: Int, reward: Int, mode: String) =
         Quest(id, title, "Kamerás gyakorlat, testhelyzet-ellenőrzéssel és hangos visszajelzéssel.", "🏋️", QuestKind.EXERCISE, count, reward * 60, mode)
@@ -115,6 +116,8 @@ object QuestStore {
             .putInt("skips", 0)
             .putBoolean("customUsed", false)
             .putString("customName", "")
+            .remove("customTemplateId")
+            .remove("customSeconds")
             .putString("replacedStarter", "")
             .putInt("completed", 0)
             .putString("result", "")
@@ -158,9 +161,12 @@ object QuestStore {
         return when (active(c)) {
             CHESS -> starter(c,CHESS)
             PUSH -> starter(c,PUSH)
-            CUSTOM -> Quest(-103, s.getString("customName", "Saját feladat") ?: "Saját feladat",
-                "15 perc megszakítás nélküli egyéni tevékenység, közben a figyelt közösségi appok zárolva vannak.",
-                "✦", QuestKind.TIMED, 900, 600)
+            CUSTOM -> {
+                val seconds = s.getInt("customSeconds", 900)
+                Quest(-103, s.getString("customName", "Saját feladat") ?: "Saját feladat",
+                    "${duration(seconds)} megszakítás nélküli egyéni tevékenység. Közben a figyelt közösségi appok zárolva vannak.",
+                    "✦", QuestKind.TIMED, seconds, customReward(seconds))
+            }
             EXTRA -> byId[s.getInt("extraId", -1)]?.let { original ->
                 val adjusted=s.getInt("extraGoal",original.goal)
                 original.copy(goal=adjusted)
@@ -282,10 +288,11 @@ object QuestStore {
         daily(c)
         return sp(c).getLong("chessStartedAt", 0L)
     }
-    @Synchronized fun verifiedChess(c: Context, verifiedGames: Int): Boolean {
+    @Synchronized fun verifiedChess(c: Context, result: ChessDailyResult): Boolean {
+        if (!result.success || result.day != LocalDate.now()) return false
         val q=current(c)
-        if (q?.kind != QuestKind.CHESS || phase(c) != 1 || !ChessVerifier.isLinked(c)
-            || verifiedGames < q.goal) return false
+        if (q?.kind != QuestKind.CHESS || phase(c) != 1 || result.count < q.goal ||
+            ChessVerifier.todayGames(c) < q.goal) return false
         return finish(c, q.reward, q.goal.toString() + " sakkparti ellenőrizve: +" + duration(q.reward))
     }
 
@@ -294,7 +301,8 @@ object QuestStore {
         val q = current(c) ?: return false
         if (q.id != id || (q.kind != QuestKind.PUSHUPS && q.kind != QuestKind.EXERCISE) || phase(c) != 0) return false
         val n = (reps(c) + 1).coerceAtMost(q.goal)
-        sp(c).edit().putInt("reps", n).commit()
+        if (!sp(c).edit().putInt("reps", n).commit()) return false
+        BossActivities.forQuest(q, null)?.let { BossProgress.add(c, it, 1) }
         return if (n == q.goal) finish(c, q.reward, "Mozgásos feladat teljesítve: +" + duration(q.reward)) else false
     }
 
@@ -302,21 +310,43 @@ object QuestStore {
     @Synchronized fun useCustom(c: Context, name: String): Boolean {
         if (customUsed(c) || phase(c) != 0 || active(c) == NONE) return false
         if (name.trim().length < 3 || name.length > 80) return false
-        val old = active(c)
-        val e = sp(c).edit().putBoolean("customUsed", true)
-            .putString("customName", name.trim())
-            .putString("replacedStarter", old)
-        e.commit()
-        setActive(c, CUSTOM)
-        return true
+        return activateCustom(c, name.trim(), 900, active(c))
     }
+
+    fun customReward(seconds: Int): Int = seconds * 2 / 3
+
+    @Synchronized internal fun startTemplate(c: Context, template: QuestTemplate): Boolean {
+        if (customUsed(c) || phase(c) == 1 || FocusPrefs.focusLocked(c)) return false
+        if (phase(c) == 2) next(c)
+        val state = sp(c)
+        val replaced = active(c).ifEmpty {
+            availableStarters(c).firstOrNull { slot ->
+                state.getInt(if (slot == CHESS) "slot0Phase" else "slot1Phase", 0) == 0 &&
+                    state.getInt(if (slot == CHESS) "slot0Reps" else "slot1Reps", 0) == 0
+            } ?: return false
+        }
+        if (reps(c) > 0) return false
+        return activateCustom(c, template.title, template.minutes * 60, replaced, template.id)
+    }
+
+    @Synchronized fun templateSeconds(c: Context, id: String): Long =
+        sp(c).getLong("templateSeconds_$id", 0L)
+
+    private fun activateCustom(c: Context, title: String, seconds: Int, replaced: String,
+                               templateId: String? = null): Boolean =
+        sp(c).edit().putBoolean("customUsed", true)
+            .putString("customName", title).putInt("customSeconds", seconds)
+            .putString("customTemplateId", templateId).putString("replacedStarter", replaced)
+            .putString("active", CUSTOM).putInt("phase", if (templateId == null) 0 else 1)
+            .putInt("reps", 0).putLong("elapsed", 0L).putLong("last", SystemClock.elapsedRealtime())
+            .putString("result", "").commit()
 
     /** Naponta 3 skip, skipenként levonunk 5 percet. */
     @Synchronized fun skip(c: Context): Boolean {
         val active = active(c)
         if (active == NONE || phase(c) != 0 || skips(c) >= 3 || Store.bal(c) < 300) return false
         val s = sp(c)
-        Store.add(c, -300)
+        if (!Store.spend(c, 300, "Quest kihagyása")) return false
         val e = s.edit().putInt("skips", skips(c) + 1)
             .putInt("phase", 2)
             .putString("result", "Kihagyva –5 percért. Jutalom nem jár.")
@@ -334,7 +364,7 @@ object QuestStore {
 
     @Synchronized fun startTimed(c: Context): Boolean {
         val q = current(c) ?: return false
-        if (q.kind != QuestKind.TIMED || phase(c) != 0) return false
+        if (q.kind != QuestKind.TIMED || phase(c) != 0 || UserQuests.pending(c)) return false
         return sp(c).edit().putInt("phase", 1)
             .putLong("elapsed", 0L)
             .putLong("last", SystemClock.elapsedRealtime()).commit()
@@ -378,6 +408,11 @@ object QuestStore {
         if (phase(c) == 2) return false
         val a = active(c)
         val q = current(c)
+        val baseChoice = when (a) {
+            CHESS -> sp(c).getInt("base0", -1)
+            PUSH -> sp(c).getInt("base1", -1)
+            else -> null
+        }
         val e = sp(c).edit()
             .putInt("phase", 2)
             .putInt("completed", completed(c) + 1)
@@ -389,19 +424,39 @@ object QuestStore {
                 CHESS -> e.putBoolean("chessDone", true)
                 PUSH -> e.putBoolean("pushDone", true)
             }
+            val templateId = sp(c).getString("customTemplateId", null)
+            if (templateId != null && q != null) {
+                e.putLong("templateSeconds_$templateId", templateSeconds(c, templateId) + q.goal)
+            }
         }
-        e.commit()
-        val before = Store.bal(c)
+        if (!e.commit()) return false
+        if (q?.kind == QuestKind.TIMED) {
+            BossActivities.forQuest(q, baseChoice)?.let { BossProgress.add(c, it, q.goal) }
+        }
         val adjustedReward = if (FocusPrefs.focusLocked(c) &&
             q?.mode in setOf("pushups","squats","plank") &&
             q?.kind in setOf(QuestKind.PUSHUPS,QuestKind.EXERCISE)) reward*2
             else reward
-        Store.add(c, adjustedReward)
         val studyIds = setOf(3, 6, 12, 13, 14, 15, 16)
-        val statsType = if (q?.kind == QuestKind.TIMED && q.id in studyIds) "STUDY"
+        val studyStarter = a in listOf(CHESS, PUSH) &&
+            sp(c).getInt(if (a == CHESS) "base0" else "base1", -1) in setOf(5, 6, 8, 9, 10)
+        val statsType = if (q?.kind == QuestKind.TIMED && (q.id in studyIds || studyStarter)) "STUDY"
             else if (q?.kind == QuestKind.TIMED) "OTHER" else q?.kind?.name ?: "OTHER"
-        ProgressStore.taskFinished(c, statsType, q?.goal ?: 0,
-            (Store.bal(c) - before).coerceAtLeast(0))
+        val reason = q?.title?.let { "Questjutalom: $it" } ?: "Questjutalom"
+        val credited = if (statsType == "STUDY") Store.addStudyReward(c, adjustedReward, reason)
+            else Store.credit(c, adjustedReward, reason)
+        val completedTitle = when (q?.kind) {
+            QuestKind.CHESS -> "${q.goal} sakkparti"
+            QuestKind.PUSHUPS -> "${q.goal} szabályos fekvőtámasz"
+            QuestKind.EXERCISE -> when (q.mode) {
+                "squats" -> "${q.goal} guggolás"
+                "lunges" -> "${q.goal} kitörés"
+                "plank" -> "${q.goal} másodperc plank"
+                else -> q.title
+            }
+            else -> q?.title
+        }
+        ProgressStore.taskFinished(c, statsType, q?.goal ?: 0, credited, title = completedTitle)
         return true
     }
 
