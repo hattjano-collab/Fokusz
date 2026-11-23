@@ -310,6 +310,8 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
                     else "Ha elfogy a saját idő, a Fókusz legfeljebb 5 perc közös időt ajánl fel. Az automatikus mód a beállításokban kapcsolható be.",
                     color=CW,fontSize=12.sp)
                 Text("Bankkal együtt: "+duration((state.pool.toLong()+state.bank).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt()),color=CG)
+                Text("Tagként naponta legfeljebb a teljes napi csapatkeret felét használhatod.",
+                    fontSize=12.sp)
                 Text("Már lefoglalt közös időd: "+duration(CloudTeams.leased(ctx)),
                     color=CM,fontSize=12.sp)
             }

@@ -60,6 +60,7 @@ internal object BackupStore {
                 "generalNext" to Field { value -> (value as String).also { require(it.length <= 200) } }
             ),
             "fokusz_focus_v1" to mapOf("pastNotes" to jsonRows(100_000, ::validateFocusNote)),
+            "fokusz_user_quests" to mapOf("quests" to jsonRows(10_000, ::validateUserQuest)),
             "fokusz_study_tools_v1" to mapOf(
                 "exams" to jsonRows(StudyToolsStore.MAX_ITEMS, ::validateStudyPlan),
                 "quizzes" to jsonRows(StudyToolsStore.MAX_ITEMS, ::validateQuizDeck),
@@ -74,6 +75,20 @@ internal object BackupStore {
         )
     }
 
+    private fun appField(file: String, key: String): Field? {
+        val prefix = when (file) {
+            "fokusz_options_v1" -> if (key.startsWith("focus_rule_")) "focus_rule_" else "blocked_"
+            "fokusz_social_use_v1" -> "limit_"
+            else -> return null
+        }
+        if (!key.startsWith(prefix) || !Regex("[a-zA-Z0-9_]+(?:\\.[a-zA-Z0-9_]+)+").matches(key.removePrefix(prefix))) return null
+        return when (prefix) {
+            "blocked_" -> bool()
+            "limit_" -> integer(0..1440)
+            else -> Field { value -> text(value, 8).also { require(it == "ALLOW" || it == "BLOCK") } }
+        }
+    }
+
     fun write(c: Context, uri: Uri) {
         ChessVerifier.accounts(c)
         val state = Store.walletBackup(c)
@@ -83,6 +98,9 @@ internal object BackupStore {
             val section = JSONObject()
             for ((key, field) in fields) {
                 preferences[key]?.let { section.put(key, field.fromPreference(it)) }
+            }
+            for ((key, value) in preferences) {
+                if (key !in fields && value != null) appField(file, key)?.let { section.put(key, it.fromPreference(value)) }
             }
             sections.put(file, section)
         }
@@ -145,7 +163,9 @@ internal object BackupStore {
             val sections = document.getJSONObject("preferences")
             val settings = fields().mapValues { (file, fields) ->
                 val section = if (sections.has(file)) sections.getJSONObject(file) else JSONObject()
-                fields.mapValues { (key, field) ->
+                val dynamic = section.keys().asSequence().filter { it !in fields }
+                    .mapNotNull { key -> appField(file, key)?.let { key to it } }.toMap()
+                (fields + dynamic).mapValues { (key, field) ->
                     if (section.has(key)) field.fromDocument(section.get(key)) else null
                 }
             }
@@ -211,6 +231,14 @@ internal object BackupStore {
     }
 
     private fun bool() = Field { value -> value as Boolean }
+
+    private fun validateUserQuest(row: JSONObject): String {
+        val id = uuid(row.getString("id"))
+        require(text(row.get("title"), 80).trim().length >= 3)
+        val seconds = number(row.get("seconds"))
+        require(seconds in 60L..86400L && number(row.get("reward")) in 0L..seconds)
+        return id
+    }
 
     private fun jsonRows(maxCount: Int, validate: (JSONObject) -> String) =
         Field({ JSONArray(it as String) }) { value ->

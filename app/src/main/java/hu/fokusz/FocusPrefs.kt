@@ -5,6 +5,10 @@ import android.os.SystemClock
 import org.json.JSONArray
 import java.time.LocalDate
 
+internal enum class FocusAppRule(val label: String) {
+    DEFAULT("Alapértelmezett"), ALLOW("Engedélyezve"), BLOCK("Tiltva")
+}
+
 object FocusPrefs {
     const val CLASSROOM_PACKAGE = "com.google.android.apps.classroom"
     const val MAX_FOCUS_NOTE = 2000
@@ -42,21 +46,48 @@ object FocusPrefs {
         "com.google.android.packageinstaller", "com.google.android.inputmethod.latin",
         "com.android.inputmethod.latin", "com.miui.guardprovider"
     )
-    fun alwaysAllowedInFocus(c: Context, pkg: String): Boolean = pkg == c.packageName || pkg in focusAllowed
+    private val essentialPackages = setOf(
+        CLASSROOM_PACKAGE, "android", "com.android.intentresolver", "com.android.systemui", "com.android.phone", "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller", "com.miui.home", "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher"
+    )
+    fun isEssential(c: Context, pkg: String): Boolean = pkg == c.packageName || pkg in essentialPackages
 
-    fun allowedDuringFocus(c: Context, pkg: String): Boolean =
-        pkg.isBlank() || alwaysAllowedInFocus(c, pkg) ||
-            pkg in focus(c).getStringSet("subjectApps", emptySet()).orEmpty()
+    fun alwaysAllowedInFocus(c: Context, pkg: String): Boolean = isEssential(c, pkg) || pkg in focusAllowed
+
+    internal fun focusRule(c: Context, pkg: String): FocusAppRule {
+        val saved = sp(c).getString("focus_rule_$pkg", null)
+        return FocusAppRule.entries.firstOrNull { it.name == saved } ?: FocusAppRule.DEFAULT
+    }
+
+    internal fun setFocusRule(c: Context, pkg: String, rule: FocusAppRule) {
+        val editor = sp(c).edit()
+        if (rule == FocusAppRule.DEFAULT) editor.remove("focus_rule_$pkg") else editor.putString("focus_rule_$pkg", rule.name)
+        editor.apply()
+    }
+
+    internal fun selectedSubject(c: Context): FocusSubject =
+        FocusSubjects.all(c).firstOrNull { it.id == FocusSubjects.selected(c) } ?: FocusSubjects.general
+
+    internal fun allowedDuringFocus(c: Context, pkg: String, subjectApps: Set<String>? = null): Boolean {
+        if (pkg.isBlank() || isEssential(c, pkg)) return true
+        return when (focusRule(c, pkg)) {
+            FocusAppRule.ALLOW -> true
+            FocusAppRule.BLOCK -> false
+            FocusAppRule.DEFAULT -> pkg in focusAllowed ||
+                pkg in (subjectApps ?: focus(c).getStringSet("subjectApps", emptySet()).orEmpty())
+        }
+    }
 
     private val standard = Store.BLOCKED + setOf("com.ss.android.ugc.trill")
     fun blocked(c: Context, pkg: String): Boolean {
-        if (pkg == CLASSROOM_PACKAGE) return false
+        if (isEssential(c, pkg)) return false
         val p = sp(c)
         val canonical = SocialUsage.appKey(pkg)
         return p.getBoolean("blocked_$canonical", p.getBoolean("blocked_$pkg", pkg in standard))
     }
     fun setBlocked(c: Context, pkg: String, enabled: Boolean) {
-        sp(c).edit().putBoolean("blocked_" + pkg, enabled).apply()
+        sp(c).edit().putBoolean("blocked_" + SocialUsage.appKey(pkg), enabled).apply()
     }
     fun maxBalance(c: Context) = sp(c).getInt("maximum_seconds", 14400)
     fun setMaxBalance(c: Context, sec: Int) {
@@ -75,7 +106,7 @@ object FocusPrefs {
     @Synchronized fun activateEmergency(c: Context): Boolean {
         if (!emergencyAvailable(c)) return false
         // Ne lehessen az egyéni quest teljes lezárását feloldani.
-        if (QuestStore.isCustomTimerLocked(c) || focusLocked(c)) return false
+        if (QuestStore.isCustomTimerLocked(c) || UserQuests.locked(c) || focusLocked(c)) return false
         sp(c).edit().putString("emergency_date", today())
             .putLong("emergency_until", SystemClock.elapsedRealtime() + 180000L).commit()
         return true
@@ -83,7 +114,7 @@ object FocusPrefs {
     fun emergencyActive(c: Context): Boolean =
         sp(c).getString("emergency_date", "") == today() &&
             SystemClock.elapsedRealtime() < sp(c).getLong("emergency_until", 0L) &&
-            !QuestStore.isCustomTimerLocked(c) && !focusLocked(c)
+            !QuestStore.isCustomTimerLocked(c) && !UserQuests.locked(c) && !focusLocked(c)
     fun emergencyLeft(c: Context): Int {
         if (!emergencyActive(c)) return 0
         return ((sp(c).getLong("emergency_until", 0L) - SystemClock.elapsedRealtime()) / 1000L).toInt().coerceAtLeast(0)
@@ -93,7 +124,7 @@ object FocusPrefs {
     fun focusPhase(c: Context): Int = focus(c).getInt("phase", 0) // 0 off,1 active,2 finished
     fun focusTarget(c: Context) = focus(c).getInt("target", 1500)
     internal fun startFocus(c: Context, seconds: Int, subject: FocusSubject = FocusSubjects.general): Boolean {
-        if (QuestStore.isTimerLocked(c)) return false
+        if (QuestStore.isTimerLocked(c) || UserQuests.pending(c)) return false
         if (seconds !in 900..7200) return false
         return synchronized(this) {
             if (focusPhase(c) == 1) return@synchronized false

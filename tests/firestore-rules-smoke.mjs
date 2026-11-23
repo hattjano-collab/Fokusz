@@ -26,6 +26,15 @@ function profile(name){
 function journal(uid, kind, beforePool, beforeBank, afterPool, afterBank) {
   return {uid,kind,beforePool,beforeBank,afterPool,afterBank,createdAt:serverTimestamp()};
 }
+function reserve(db, uid, eventId, pool, bank, amount, used) {
+  const entry=writeBatch(db);
+  const nextPool=Math.max(0,pool-amount);
+  const nextBank=bank-Math.max(0,amount-pool);
+  entry.update(doc(db,"teams",groupId),{pool:nextPool,bank:nextBank,lastBankEvent:eventId});
+  entry.set(doc(db,"teams",groupId,"bankEvents",eventId),journal(uid,"usage",pool,bank,nextPool,nextBank));
+  entry.set(doc(db,"teams",groupId,"dailyUsage",uid),{day:today,used});
+  return entry.commit();
+}
 try {
   await assertSucceeds(setDoc(groupDoc,{
     ownerUid:owner,name:"Fókusz barátok",inviteKey:token,joinProof:"",
@@ -51,7 +60,8 @@ try {
   await assertSucceeds(getDoc(guestDoc));
   await assertFails(getDoc(outsiderDoc));
   console.log("PASS membership remains private");
-  await assertSucceeds(updateDoc(groupDoc,{pool:1170}));
+  await assertFails(updateDoc(groupDoc,{pool:1170}));
+  await assertSucceeds(reserve(ownerDb,owner,owner+"_usage-000000000000",1200,0,30,30));
   await assertFails(updateDoc(guestDoc,{pool:4000}));
   console.log("PASS spending is allowed, arbitrary time minting is rejected");
   const eventId=owner+"_d47a3b0a-865e-4ac8-a675-50ff0d45bc81";
@@ -107,11 +117,9 @@ try {
   const forgedUsage=writeBatch(ownerDb);
   forgedUsage.update(groupDoc,{pool:2010,lastBankEvent:usageId});
   forgedUsage.set(usage,journal(owner,"usage",2070,91200,1900,91200));
+  forgedUsage.set(doc(ownerDb,"teams",groupId,"dailyUsage",owner),{day:today,used:90});
   await assertFails(forgedUsage.commit());
-  const use=writeBatch(ownerDb);
-  use.update(groupDoc,{pool:2010,lastBankEvent:usageId});
-  use.set(usage,journal(owner,"usage",2070,91200,2010,91200));
-  await assertSucceeds(use.commit());
+  await assertSucceeds(reserve(ownerDb,owner,usageId,2070,91200,60,90));
   await assertSucceeds(getDoc(doc(guestDb,"teams",groupId,"bankEvents",usageId)));
   await assertFails(getDoc(doc(outsiderDb,"teams",groupId,"bankEvents",usageId)));
   await assertFails(deleteDoc(usage));
@@ -128,6 +136,19 @@ try {
   daily.set(doc(ownerDb,"teams",groupId,"bankEvents",dailyId),journal(owner,"daily",2010,91200,1200,102531));
   await assertSucceeds(daily.commit());
   console.log("PASS daily pool grant and bank interest can be journaled together");
+
+  const ownerQuota=doc(ownerDb,"teams",groupId,"dailyUsage",owner);
+  await assertFails(setDoc(ownerQuota,{day:today,used:0}));
+  await assertFails(getDoc(doc(guestDb,"teams",groupId,"dailyUsage",owner)));
+  for (let used=90; used<600;) {
+    const amount=Math.min(60,600-used);
+    const pool=1200-(used-90);
+    used+=amount;
+    await assertSucceeds(reserve(ownerDb,owner,owner+"_usage-quota-"+used,pool,102531,amount,used));
+  }
+  await assertFails(reserve(ownerDb,owner,owner+"_usage-quota-601",690,102531,1,601));
+  await assertSucceeds(reserve(guestDb,guest,guest+"_usage-quota-060",690,102531,60,60));
+  console.log("PASS each Firebase identity can reserve at most half the daily group allowance");
 
   const round=(await getDoc(groupDoc)).data().bossClaimedAt;
   const ownerTask=doc(ownerDb,"teams",groupId,"bossTasks",owner+"_chess");

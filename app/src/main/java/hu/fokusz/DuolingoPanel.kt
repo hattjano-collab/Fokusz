@@ -77,6 +77,7 @@ private val DGOLD=Color(0xFFFFD58D)
     val today=remember(refreshed,busy,status) { DuolingoStore.rewardedToday(ctx) }
     val currentStreak=remember(refreshed,busy,status) { DuolingoStore.streak(ctx) }
     val xp=remember(refreshed,busy,status) { DuolingoStore.todayXp(ctx) }
+    val fokuszXp=remember(refreshed,busy,status) { DuolingoStore.todayFokuszXp(ctx) }
     val transition=rememberInfiniteTransition(label="Duolingo streak animáció")
     val flameScale by transition.animateFloat(0.96f,1.08f,
         animationSpec=infiniteRepeatable(tween(1050),RepeatMode.Reverse),
@@ -134,11 +135,12 @@ private val DGOLD=Color(0xFFFFD58D)
                 }
                 Column(Modifier.weight(1f).clip(RoundedCornerShape(15.dp))
                     .background(Color(0xFF213D37)).padding(14.dp)) {
-                    Text("MAI XP",color=DMUTED,fontSize=11.sp)
-                    Text(xp.toString(),color=DWHITE,fontSize=23.sp,
+                    Text("MAI DUOLINGO XP",color=DMUTED,fontSize=11.sp)
+                    Text(if(xp>0) xp.toString() else "—",color=DWHITE,fontSize=23.sp,
                         fontWeight=FontWeight.Black)
                 }
             }
+            Text("Mai Fókusz XP: $fokuszXp",color=DUO,fontWeight=FontWeight.Bold)
             LinearProgressIndicator(progress={if(today)1f else 0f},
                 modifier=Modifier.fillMaxWidth().height(11.dp)
                     .clip(RoundedCornerShape(10.dp)),

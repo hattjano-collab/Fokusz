@@ -77,6 +77,7 @@ class FocusService : Service() {
         isRunning = true
         CloudTeams.start(this)
         QuestStore.resetClock(this)
+        UserQuests.resetClock(this)
         FocusPrefs.resetClock(this)
         handler.post(pulse)
     }
@@ -85,7 +86,9 @@ class FocusService : Service() {
         val intent=Intent(this,MainActivity::class.java)
         val pi=PendingIntent.getActivity(this,0,intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val custom = UserQuests.active(this)
         val part=when {
+            custom != null && custom.left > 0 -> "Saját quest: " + clock(custom.left)
             QuestStore.isTimerLocked(this) -> "Quest: "+clock(QuestStore.secondsLeft(this))
             FocusPrefs.focusLocked(this) -> "Fókusz: "+clock(FocusPrefs.focusLeft(this))+
                 (if(FocusPrefs.focusPaused(this))" (szünet)" else "")
@@ -95,7 +98,7 @@ class FocusService : Service() {
         return Notification.Builder(this,CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setContentTitle(if(reminder!=null)reminder else "Fókusz aktív")
-            .setContentText(QuestStore.current(this)?.title?.take(38)?.let {
+            .setContentText((custom?.quest?.title ?: QuestStore.current(this)?.title)?.take(38)?.let {
                 part+" • "+it
             } ?: part)
             .setContentIntent(pi)
@@ -113,6 +116,7 @@ class FocusService : Service() {
     private fun monitor() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         QuestStore.tick(this)
+        UserQuests.tick(this)
         FocusPrefs.tick(this)
         CloudTeams.pulse(this)
         val elapsed=SystemClock.elapsedRealtime()
@@ -131,8 +135,7 @@ class FocusService : Service() {
                     QuestStore.verifiedChess(this@FocusService,result)
             }
         }
-        if(DuolingoStore.linked(this) && !DuolingoStore.rewardedToday(this)
-            && elapsed-lastDuolingoSync>=5400000L) {
+        if(DuolingoStore.linked(this) && (lastDuolingoSync == 0L || elapsed-lastDuolingoSync >= 900_000L)) {
             lastDuolingoSync=elapsed
             background.launch { DuolingoStore.check(this@FocusService) }
         }
@@ -144,7 +147,9 @@ class FocusService : Service() {
         }
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = us.queryEvents(now - 30_000L, now) ?: return
+        if (lastEventTime > now) lastEventTime = 0L
+        val window = if (lastEventTime == 0L) 30 * 60_000L else 30_000L
+        val events = us.queryEvents(now - window, now) ?: return
         val ev = UsageEvents.Event()
         val previouslySeen = lastEventTime
         while (events.hasNextEvent()) {
@@ -160,37 +165,45 @@ class FocusService : Service() {
             lastEventTime = ev.timeStamp
         }
         val questLocked = QuestStore.isTimerLocked(this)
+        val legacyCustom = questLocked && QuestStore.isCustomTimerLocked(this)
+        val userQuest = UserQuests.locked(this)
         val focusLocked = FocusPrefs.focusLocked(this)
-        val focusAllowed = FocusPrefs.allowedDuringFocus(this, currentPackage)
-        if (currentPackage == FocusPrefs.CLASSROOM_PACKAGE || QuizDraft.isCameraActive(currentPackage) ||
-            (focusLocked && focusAllowed && !questLocked)) {
+        if (currentPackage.isBlank() || FocusPrefs.isEssential(this, currentPackage) ||
+            QuizDraft.isCameraActive(currentPackage)) {
             teamSession.clear()
             hideCover()
             return
         }
-        val locked = questLocked || focusLocked
-        val browsersLocked = QuestStore.isCustomTimerLocked(this) && currentPackage in Store.BROWSERS
-        val trackedSocial = FocusPrefs.blocked(this, currentPackage)
-        val isSocial = trackedSocial
-            || (locked && (currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL))
-        val focusUnapproved = focusLocked && !focusAllowed
-        if (!isSocial && !browsersLocked && !focusUnapproved) {
-            teamSession.clear()
-            hideCover()
-            return
+        val focusRulesActive = focusLocked || legacyCustom || userQuest
+        val subjectApps = when {
+            userQuest -> UserQuests.subjectApps(this)
+            legacyCustom -> FocusPrefs.selectedSubject(this).packages
+            else -> null
         }
-
         val emergency = FocusPrefs.emergencyActive(this)
-        if (locked && !emergency) {
+        val normalQuestBlock = questLocked && !legacyCustom && !emergency &&
+            (FocusPrefs.blocked(this, currentPackage) || currentPackage in Store.BLOCKED ||
+                currentPackage in Store.QUEST_SOCIAL)
+        if ((focusRulesActive && !FocusPrefs.allowedDuringFocus(this, currentPackage, subjectApps)) || normalQuestBlock) {
             teamSession.clear()
             showCover(CoverReason.QUEST)
             return
         }
-        if (trackedSocial && SocialUsage.dailyLimitReached(this, currentPackage)) {
+        if (SocialUsage.dailyLimitReached(this, currentPackage)) {
+            teamSession.clear()
             showCover(CoverReason.APP_LIMIT)
             return
         }
-        val breakLeft = if (trackedSocial) SocialUsage.breakSecondsLeft(this) else 0
+        val chargeBalance = !focusRulesActive && FocusPrefs.blocked(this, currentPackage)
+        if (!chargeBalance) {
+            SocialUsage.recordSecond(this, currentPackage, advanceBreak = false)
+            teamSession.clear()
+            hideCover()
+            return
+        }
+        val socialApp = currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL ||
+            FocusPrefs.socialChoices.any { it.second == currentPackage }
+        val breakLeft = if (socialApp) SocialUsage.breakSecondsLeft(this) else 0
         if (breakLeft > 0) {
             showBreak(breakLeft)
             return
@@ -229,9 +242,8 @@ class FocusService : Service() {
         }
         if (spentTeam) ScreenTimeLedger.record(this, "$spendReason · csapatkeret", -1)
         ProgressStore.used(this, 1)
-        val newBreak = if (trackedSocial) {
-            SocialUsage.recordSecond(this, currentPackage, advanceBreak = spentPersonal || spentTeam)
-        } else 0
+        val newBreak = SocialUsage.recordSecond(this, currentPackage,
+            advanceBreak = socialApp && (spentPersonal || spentTeam))
         if (newBreak > 0) showBreak(newBreak) else hideCover()
     }
 

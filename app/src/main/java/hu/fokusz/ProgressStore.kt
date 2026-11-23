@@ -62,7 +62,21 @@ object ProgressStore {
         if (seconds > 0) increment(c, "earned", seconds)
     }
 
+    @Synchronized fun awardXp(c: Context, points: Int, receipt: String): Int {
+        if (points <= 0) return 0
+        val p = sp(c)
+        val key = "xp_receipt_$receipt"
+        val delta = (points - p.getInt(key, 0)).coerceAtLeast(0)
+        if (delta == 0) return 0
+        val total = (p.getInt("xp", 0).toLong() + delta).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        if (!p.edit().putInt("xp", total).putInt(key, points).commit()) return 0
+        return delta
+    }
+
+    fun receiptXp(c: Context, receipt: String): Int = sp(c).getInt("xp_receipt_$receipt", 0)
+
     @Synchronized fun chessEarned(c: Context, date: LocalDate, gameId: String, seconds: Int) {
+        awardXp(c, 15, "chess_$gameId")
         if (seconds <= 0) return
         val prefs = day(c, date)
         val key = "chess_earned_$gameId"
@@ -79,13 +93,21 @@ object ProgressStore {
         if(mode=="pushups") increment(c,"pushups",count)
         val p=sp(c)
         p.edit().putInt("total_reps",p.getInt("total_reps",0)+count).apply()
+        val stats = day(c)
+        val repetitions = stats.getInt("coach_xp_units_$mode", 0) + count
+        stats.edit().putInt("coach_xp_units_$mode", repetitions).apply()
+        val points = if (mode == "plank") repetitions / 5 else repetitions * 2
+        awardXp(c, points.coerceAtMost(100), "coach_${LocalDate.now()}_$mode")
     }
 
-    @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int, title: String? = null) {
+    @Synchronized fun taskFinished(c: Context, type: String, goal: Int, reward: Int, title: String? = null,
+                                   receipt: String? = null) {
         val completedAt = LocalDateTime.now()
         val date = completedAt.toLocalDate()
         val stats = day(c, date)
         val p = sp(c)
+        val receiptKey = receipt?.let { "task_receipt_$it" }
+        if (receiptKey != null && p.contains(receiptKey)) return
         val activityTitle = title ?: when (type) {
             "STUDY" -> "Fókuszmód"
             "LANGUAGE" -> "Xeropan nyelvgyakorlás"
@@ -121,10 +143,11 @@ object ProgressStore {
         val streak = if (last == today) p.getInt("streak", 0)
             else if (lastDate == date.minusDays(1)) p.getInt("streak", 0) + 1
             else 1
-        p.edit().putInt("xp", newXP).putInt("streak", streak)
+        val progress = p.edit().putInt("xp", newXP).putInt("streak", streak)
             .putString("last_completed", today)
             .putInt("total_tasks", p.getInt("total_tasks", 0) + 1)
-            .apply()
+        if (receiptKey != null) progress.putBoolean(receiptKey, true)
+        progress.commit()
         updateWidget(c)
         // Minden ténylegesen befejezett személyes quest egyszer +5 percet ad a csapatnak.
         CloudTeams.questCompleted(c)
@@ -173,6 +196,7 @@ object ProgressStore {
         p.edit().putString("weeklyClaim", key).apply()
         val credited = Store.credit(c, 600, "Heti questbónusz")
         earned(c, credited)
+        awardXp(c, 75, "quest_week_$key")
         return true
     }
     fun updateWidget(c: Context) {

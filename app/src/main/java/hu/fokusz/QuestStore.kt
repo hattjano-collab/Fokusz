@@ -363,7 +363,7 @@ object QuestStore {
 
     @Synchronized fun startTimed(c: Context): Boolean {
         val q = current(c) ?: return false
-        if (q.kind != QuestKind.TIMED || phase(c) != 0) return false
+        if (q.kind != QuestKind.TIMED || phase(c) != 0 || UserQuests.pending(c)) return false
         return sp(c).edit().putInt("phase", 1)
             .putLong("elapsed", 0L)
             .putLong("last", SystemClock.elapsedRealtime()).commit()

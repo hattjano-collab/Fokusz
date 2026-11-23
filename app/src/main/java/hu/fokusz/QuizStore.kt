@@ -76,10 +76,16 @@ object QuizStore {
             val previous = Store.quizAttempts(c)
             val stored = readAttempts(previous) ?: return Claim(ClaimStatus.STORAGE_ERROR)
             val duplicate = stored.firstOrNull { sameAttempt(it, item) }
-            if (duplicate != null) return Claim(ClaimStatus.DUPLICATE, duplicate)
+            if (duplicate != null) {
+                ProgressStore.awardXp(c, duplicate.correct * 5, "quiz_${duplicate.id}")
+                return Claim(ClaimStatus.DUPLICATE, duplicate)
+            }
             val next = JSONArray(previous).put(encode(item)).toString()
             when (Store.commitQuizAttempt(c, previous, next, item.rewardSeconds)) {
-                Store.QuizWrite.SAVED -> return Claim(ClaimStatus.SAVED, item)
+                Store.QuizWrite.SAVED -> {
+                    ProgressStore.awardXp(c, item.correct * 5, "quiz_${item.id}")
+                    return Claim(ClaimStatus.SAVED, item)
+                }
                 Store.QuizWrite.LIMIT_REACHED -> return Claim(ClaimStatus.LIMIT_REACHED)
                 Store.QuizWrite.STORAGE_ERROR -> return Claim(ClaimStatus.STORAGE_ERROR)
                 Store.QuizWrite.HISTORY_CHANGED -> Unit

@@ -54,6 +54,7 @@ object Store {
     )
 
     @Synchronized internal fun walletBackup(c: Context): BackupWalletData {
+        bal(c)
         val preferences = sp(c)
         val day = LocalDate.now()
         val dayKey = day.toString()
@@ -87,6 +88,7 @@ object Store {
             issuedAt > preferences.getLong(LAST_RESTORE, 0L)) {
             "Ezt a mentést vagy egy frissebb változatát már visszaállítottad."
         }
+        bal(c)
         val editor = preferences.edit().putString(LAST_BACKUP_ID, backupId).putLong(LAST_RESTORE, issuedAt)
         val localAttempts = JSONArray(preferences.getString(QUIZ_ATTEMPTS, "[]") ?: "[]")
         editor.putString(QUIZ_ATTEMPTS, mergeQuizAttempts(localAttempts, backup.quizAttempts).toString())
@@ -154,17 +156,73 @@ object Store {
         return credited
     }
 
+    @Synchronized internal fun creditUserQuest(c: Context, runId: String, seconds: Int): Int? {
+        val p = sp(c)
+        val receipt = "user_quest_reward_$runId"
+        if (p.contains(receipt)) return p.getInt(receipt, 0)
+        val old = bal(c)
+        if (seconds !in 0..(MAX_SAFE_SECONDS - old)) return null
+        if (!p.edit().putInt("b", old + seconds).putInt(receipt, seconds).commit()) return null
+        ScreenTimeLedger.record(c, "Saját quest jutalma", seconds)
+        return seconds
+    }
+
     @Synchronized fun bal(c: Context): Int {
-        val s = sp(c)
-        val today = LocalDate.now().toString()
-        val previous = s.getString("d", null)
-        if (previous != today) {
-            val old = s.getInt("b", 0)
-            s.edit().putString("d", today).putInt("b", DAILY).remove(WALLET_DEBITS).apply()
-            if (previous != null) ScreenTimeLedger.record(c, "Előző napi keret lezárása", -old)
-            ScreenTimeLedger.record(c, "Napi alapkeret", DAILY)
+        val settings = sp(c)
+        val today = LocalDate.now()
+        val previous = settings.getString("d", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        if (previous != null && previous >= today) return settings.getInt("b", DAILY)
+        val oldBalance = settings.getInt("b", 0)
+        var bank = TimeBank.read(c, settings, previous ?: today)
+        if (previous != null) {
+            bank = bank.advance(previous)
+            if (bank.day < today) {
+                bank = bank.addRemainder(oldBalance)
+            } else {
+                // A korábbi bankverzió már elszámolhatta ezt a napot a napi egyenleg előtt.
+                val added = minOf(oldBalance.toLong() * 11 / 10, (MAX_SAFE_SECONDS - bank.ready - bank.pending).toLong()).toInt()
+                bank = bank.copy(ready = bank.ready + added)
+            }
         }
-        return s.getInt("b", DAILY)
+        bank = bank.advance(today)
+        val editor = settings.edit().putString("d", today.toString()).putInt("b", DAILY).remove(WALLET_DEBITS)
+        TimeBank.write(editor, bank)
+        if (!editor.commit()) return settings.getInt("b", DAILY)
+        if (previous != null && oldBalance > 0) ScreenTimeLedger.record(c, "Napi maradék átvezetése a bankba", -oldBalance)
+        ScreenTimeLedger.record(c, "Napi alapkeret", DAILY)
+        return DAILY
+    }
+
+    @Synchronized internal fun bank(c: Context): TimeBankState {
+        bal(c)
+        val settings = sp(c)
+        val state = TimeBank.read(c, settings, LocalDate.now())
+        val rolled = state.advance(LocalDate.now())
+        if (rolled != state || !TimeBank.migrated(settings)) {
+            val edit = settings.edit()
+            TimeBank.write(edit, rolled)
+            edit.commit()
+        }
+        return rolled
+    }
+
+    internal fun transferBank(c: Context, seconds: Int, deposit: Boolean): Boolean {
+        synchronized(this) {
+            if (seconds <= 0) return false
+            val balance = bal(c)
+            val existing = bank(c)
+            if (deposit && (seconds > balance || seconds > MAX_SAFE_SECONDS - existing.ready - existing.pending)) return false
+            if (!deposit && (seconds > existing.ready || seconds > MAX_SAFE_SECONDS - balance)) return false
+            val delta = if (deposit) -seconds else seconds
+            val settings = sp(c)
+            val editor = settings.edit().putInt("b", balance + delta)
+            if (deposit) editor.putLong(WALLET_DEBITS, settings.getLong(WALLET_DEBITS, 0L) + seconds)
+            TimeBank.write(editor, existing.copy(ready = existing.ready - delta))
+            if (!editor.commit()) return false
+            ScreenTimeLedger.record(c, if (deposit) "Befizetés az időbankba" else "Kivét az időbankból", delta)
+        }
+        ProgressStore.updateWidget(c)
+        return true
     }
 
     fun add(c: Context, sec: Int, reason: String = "Egyenlegváltozás"): Int {

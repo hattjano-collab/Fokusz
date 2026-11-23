@@ -111,7 +111,10 @@ object CloudTeams {
         if(active(c))io.launch{syncProfile(c.applicationContext)}
     }
     fun currentUid()=auth().currentUser?.uid ?: ""
-    fun leased(c:Context)=prefs(c).getInt("lease",0).coerceAtLeast(0)
+    private fun quotaKey(id: String, day: Timestamp) = "allocated_${id}_${day.seconds}"
+    fun leased(c: Context): Int = prefs(c).let {
+        if (it.getLong("leaseDay", 0L) == todayUtc().seconds) it.getInt("lease", 0).coerceAtLeast(0) else 0
+    }
     fun pendingContribution(c:Context)=prefs(c).getString("contribution","")?.isNotBlank()==true
     private suspend fun ensureAuth():String {
         val existing=auth().currentUser
@@ -555,6 +558,7 @@ object CloudTeams {
     }
     private fun requestLease(c: Context, maximum: Int) {
         val id = teamId(c)
+        val day = todayUtc()
         if (id.isBlank() || maximum <= 0 || SystemClock.elapsedRealtime() < leaseRetryAt ||
             !leasing.compareAndSet(false, true)) return
         io.launch {
@@ -563,20 +567,39 @@ object CloudTeams {
                 val ref = db().collection("teams").document(id)
                 val eventId = bankEventId(uid)
                 val taken = bankTransaction(ref) { tx, journal ->
-                    val snap=tx.get(ref)
-                    val pool=snap.getLong("pool")?:0L
-                    val bank=snap.getLong("bank")?:0L
-                    val n=minOf(60L, maximum.toLong(), pool+bank)
-                    if(n<=0L)return@bankTransaction 0
-                    val fromPool=minOf(pool,n)
-                    updateBank(tx, snap, mapOf("pool" to pool-fromPool, "bank" to bank-(n-fromPool)),
+                    val snap = tx.get(ref)
+                    if (snap.getTimestamp("lastDay") != day) return@bankTransaction 0
+                    val members = snap.get("members") as? Map<*, *> ?: return@bankTransaction 0
+                    if (uid !in members) return@bankTransaction 0
+                    val pool = snap.getLong("pool") ?: 0L
+                    val bank = snap.getLong("bank") ?: 0L
+                    val quota = ref.collection("dailyUsage").document(uid)
+                    val serverQuota = if (journal) tx.get(quota) else null
+                    val localAllocated = prefs(c).getInt(quotaKey(id, day), 0).toLong()
+                    val already = if (serverQuota == null) localAllocated else {
+                        val remote = if (serverQuota.getTimestamp("day") == day) serverQuota.getLong("used") ?: 0L else 0L
+                        remote
+                    }
+                    val remaining = members.size * 300L - maxOf(already, localAllocated)
+                    val n = minOf(60L, maximum.toLong(), pool + bank, remaining)
+                    if (n <= 0L) return@bankTransaction 0
+                    val fromPool = minOf(pool, n)
+                    updateBank(tx, snap, mapOf("pool" to pool - fromPool, "bank" to bank - (n - fromPool)),
                         journal, "usage", uid, eventId)
+                    if (journal) tx.set(quota, mapOf("day" to day, "used" to already + n))
                     n.toInt()
                 }
                 synchronized(this@CloudTeams) {
                     if (teamId(c) == id && taken > 0) {
                         val p = prefs(c)
-                        p.edit().putInt("lease", (p.getInt("lease", 0) + taken).coerceAtMost(120)).commit()
+                        if (day != todayUtc()) return@synchronized
+                        val key = quotaKey(id, day)
+                        val edit = p.edit().putLong("leaseDay", day.seconds)
+                            .putInt("lease", (leased(c) + taken).coerceAtMost(120))
+                            .putInt(key, p.getInt(key, 0) + taken)
+                        p.all.keys.filter { it.startsWith("allocated_") && !it.endsWith("_${day.seconds}") }
+                            .forEach { edit.remove(it) }
+                        edit.commit()
                     } else if (teamId(c) == id) leaseRetryAt = SystemClock.elapsedRealtime() + 10_000L
                 }
             }catch(e:Exception){
@@ -588,7 +611,7 @@ object CloudTeams {
     @Synchronized fun spendSecond(c: Context, sessionRemaining: Int? = null): Boolean {
         if (!active(c) || sessionRemaining == 0) return false
         val p=prefs(c)
-        val n=p.getInt("lease",0)
+        val n=leased(c)
         val unreserved = (sessionRemaining ?: 120) - n
         if(n<=0) {
             requestLease(c, unreserved)

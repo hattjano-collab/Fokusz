@@ -19,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -27,7 +26,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -306,9 +304,8 @@ private val C = Color(0xFF273750)
             FeatureCard("MENNYI IDŐD VAN?") { QuickTaskSuggestions() }
             if (notes.isNotEmpty()) FeatureCard("JEGYZETEK") { FocusNoteHistory(notes) }
         }
-        if (phase == 0) FeatureCard("ALKALMAZÁSOK FÓKUSZ KÖZBEN") {
-            Text("A Google Classroom mindig elérhető. Fókusz alatt a Fókusz, a Google-kereső, a ChatGPT, a Duolingo, az Xeropan, az alapvető rendszerfunkciók és a kiválasztott tantárgy engedélyezett appjai használhatók.",
-                color = M, fontSize = 12.sp)
+        FeatureCard("FÓKUSZ ALATTI APPENGEDÉLYEK") {
+            AppLimitsPanel(focus = true)
         }
     }
 }
@@ -317,7 +314,6 @@ private val C = Color(0xFF273750)
     val ctx = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
     var restored by remember { mutableIntStateOf(0) }
-    var limitApp by remember { mutableStateOf<Pair<String, String>?>(null) }
     val currentTheme = remember(refresh) { FocusPrefs.theme(ctx) }
     val maxTime = remember(refresh) { FocusPrefs.maxBalance(ctx) }
     val level = ProgressStore.level(ctx)
@@ -329,23 +325,8 @@ private val C = Color(0xFF273750)
         FeatureCard("♟️ SAKKFÓKUSZ (HA KIVÁLASZTOD)") {
             key(restored) { ChessAccountPanel() }
         }
-        FeatureCard("🔒 SAJÁT BLOKKLISTA") {
-            Text("Válaszd ki az időkeretből használható appokat. Tíz perc használat után 20 másodperc szünet következik, az appváltás is beleszámít.",
-                color = M, fontSize = 12.sp)
-            FocusPrefs.socialChoices.forEach { (label,pkg) ->
-                val enabled = FocusPrefs.blocked(ctx, pkg)
-                val limit = SocialUsage.dailyLimitMinutes(ctx, pkg)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, modifier = Modifier.weight(1f), color = W)
-                    TextButton(onClick = { limitApp = label to pkg }, enabled = enabled) {
-                        Text(if (limit > 0) "$limit perc" else "Napi keret")
-                    }
-                    Switch(checked = enabled,
-                        onCheckedChange = { FocusPrefs.setBlocked(ctx, pkg, it);refresh++ })
-                }
-            }
-            Text("Az appok tényleges blokkolását a gyártói háttérkorlátozások befolyásolhatják.",
-                color = M, fontSize = 11.sp)
+        FeatureCard("NAPI ALKALMAZÁSKERETEK") {
+            key(restored) { AppLimitsPanel(focus = false) }
         }
         FeatureCard("KÉPERNYŐIDŐ FIGYELMEZTETÉSEK") {
             var savedWarning by remember { mutableIntStateOf(ScreenTimeAlerts.warningSeconds(ctx)) }
@@ -440,36 +421,5 @@ private val C = Color(0xFF273750)
             Text("A Fókusz saját fejlesztésű app, nem rendszerkomponens. A tiltás nem megkerülhetetlen.",
                 color = M)
         }
-    }
-    limitApp?.let { (label, pkg) ->
-        var minutes by remember(pkg) {
-            mutableStateOf(SocialUsage.dailyLimitMinutes(ctx, pkg).toString())
-        }
-        val value = minutes.toIntOrNull()
-        AlertDialog(
-            onDismissRequest = { limitApp = null },
-            title = { Text("$label napi kerete") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Mai használat: ${clock(SocialUsage.dailySeconds(ctx, pkg))}. A 0 kikapcsolja a külön keretet.")
-                    OutlinedTextField(
-                        value = minutes,
-                        onValueChange = { minutes = it.filter(Char::isDigit).take(4) },
-                        label = { Text("Perc naponta (0–1440)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        isError = minutes.isNotEmpty() && (value == null || value !in 0..1440)
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = value != null && value in 0..1440, onClick = {
-                    SocialUsage.setDailyLimit(ctx, pkg, value ?: return@TextButton)
-                    limitApp = null
-                    refresh++
-                }) { Text("Mentés") }
-            },
-            dismissButton = { TextButton(onClick = { limitApp = null }) { Text("Mégse") } }
-        )
     }
 }

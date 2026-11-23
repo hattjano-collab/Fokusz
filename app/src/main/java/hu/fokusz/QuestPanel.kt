@@ -184,6 +184,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
+        UserQuestPanel(serviceReady)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("NAPI KÜLDETÉSEK", color = QWHITE,

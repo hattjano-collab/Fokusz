@@ -14,6 +14,9 @@ service cloud.firestore {
     function bankEventPath(team, eventId) {
       return /databases/$(database)/documents/teams/$(team)/bankEvents/$(eventId);
     }
+    function quotaPath(team, uid) {
+      return /databases/$(database)/documents/teams/$(team)/dailyUsage/$(uid);
+    }
     function validBankRecord(team, eventId, kind) {
       return eventId is string && eventId.size() >= 20 && eventId.size() <= 160
         && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]+')
@@ -91,6 +94,10 @@ service cloud.firestore {
       let oldTotal = resource.data.pool + resource.data.bank;
       let newTotal = request.resource.data.pool + request.resource.data.bank;
       let spent = oldTotal - newTotal;
+      let quota = quotaPath(team, request.auth.uid);
+      let afterQuota = getAfter(quota).data;
+      let beforeQuota = exists(quota) && get(quota).data.day == request.time.date()
+        ? get(quota).data.used : 0;
       return request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['pool','bank','lastBankEvent'])
         && spent >= 1 && spent <= 60
@@ -101,7 +108,11 @@ service cloud.firestore {
         && request.resource.data.bank ==
            resource.data.bank - (spent - (resource.data.pool -
                                            request.resource.data.pool))
-        && compatibleBankRecord(team,'usage');
+        && resource.data.lastDay == request.time.date()
+        && afterQuota.day == request.time.date()
+        && afterQuota.used == beforeQuota + spent
+        && afterQuota.used <= resource.data.members.keys().size() * 300
+        && validBankRecord(team, request.resource.data.get('lastBankEvent',''), 'usage');
     }
     function validDailySettlement(team) {
       let total = resource.data.bank + resource.data.pool;
@@ -284,6 +295,28 @@ service cloud.firestore {
             && eventId != team.get('lastBankEvent','') && eventId == next.lastBankEvent
             && row.beforePool == team.pool && row.beforeBank == team.bank
             && row.afterPool == next.pool && row.afterBank == next.bank;
+        }
+      }
+
+      match /dailyUsage/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid && uid in get(teamPath(teamId)).data.members;
+        allow create, update: if signedIn() && validQuota();
+        allow list, delete: if false;
+
+        function validQuota() {
+          let oldTeam = get(teamPath(teamId)).data;
+          let newTeam = getAfter(teamPath(teamId)).data;
+          let oldUsage = resource != null && resource.data.day == request.time.date() ? resource.data.used : 0;
+          let spent = oldTeam.pool + oldTeam.bank - newTeam.pool - newTeam.bank;
+          return request.auth.uid == uid && uid in oldTeam.members
+            && oldTeam.lastDay == request.time.date() && newTeam.lastDay == oldTeam.lastDay
+            && request.resource.data.keys().hasOnly(['day','used'])
+            && request.resource.data.day == request.time.date()
+            && request.resource.data.used is int && request.resource.data.used == oldUsage + spent
+            && request.resource.data.used <= oldTeam.members.keys().size() * 300
+            && spent >= 1 && spent <= 60
+            && newTeam.lastBankEvent != oldTeam.get('lastBankEvent','')
+            && getAfter(bankEventPath(teamId, newTeam.lastBankEvent)).data.kind == 'usage';
         }
       }
 

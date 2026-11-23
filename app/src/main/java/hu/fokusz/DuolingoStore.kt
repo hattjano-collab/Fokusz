@@ -14,15 +14,12 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneOffset
 import java.time.ZoneId
 
 data class DuoCheck(val success:Boolean,val verifiedToday:Boolean,
@@ -37,7 +34,10 @@ object DuolingoStore {
     fun linked(c:Context)=sp(c).getString("username","")?.isNotBlank()==true
     fun username(c:Context)=sp(c).getString("username","") ?: ""
     fun streak(c:Context)=sp(c).getInt("lastStreak",0)
-    fun todayXp(c:Context)=sp(c).getInt("todayXp",0)
+    fun todayXp(c: Context): Int = sp(c).let {
+        if (it.getString("xpDay", "") == LocalDate.now().toString()) it.getInt("todayXp", 0) else 0
+    }
+    fun todayFokuszXp(c: Context) = ProgressStore.receiptXp(c, "duolingo_${LocalDate.now()}")
     fun lastMessage(c:Context)=sp(c).getString("lastMessage","Napi teljesítés ellenőrzése.") ?: ""
     fun rewardedToday(c:Context)=sp(c).getString("rewardDay","")==LocalDate.now().toString()
     fun notifications(c:Context)=sp(c).getBoolean("reminders",true)
@@ -56,7 +56,7 @@ object DuolingoStore {
         http.connectTimeout=8000
         http.readTimeout=12000
         http.setRequestProperty("Accept","application/json")
-        http.setRequestProperty("User-Agent","FokuszAndroid/2.4 (daily language streak)")
+        http.setRequestProperty("User-Agent","FokuszAndroid/3.1 (daily language practice)")
         try {
             if(http.responseCode !in 200..299)throw IllegalStateException(
                 "A Duolingo nem elérhető (HTTP "+http.responseCode+").")
@@ -85,7 +85,14 @@ object DuolingoStore {
             val id=profile.optLong("id",0L)
             if(id<=0)throw IllegalStateException("Hiányzik a nyilvános azonosító.")
             val saved=sp(c)
-            saved.edit().putString("username",user).putLong("userId",id).commit()
+            val editor = saved.edit().putString("username", user).putLong("userId", id)
+            if (saved.getLong("userId", 0L) != id) {
+                editor.putString("xpDay", LocalDate.now().toString()).putInt("todayXp", 0)
+                    .putLong("observationAccount", id)
+                    .putInt("observedTotal", profile.optInt("totalXp", -1))
+                    .putInt("lastStreak", profile.optInt("streak", 0))
+            }
+            editor.commit()
             scheduleReminders(c)
             DuoCheck(true,false,streak(c),0,
                 "A Duolingo-profil mentve. A napi XP ellenőrzése automatikusan elindul.")
@@ -96,72 +103,82 @@ object DuolingoStore {
         }
     }
 
-    /** Egy profil ellenőrzése legfeljebb egyszer írhat jóvá +180 másodpercet naponta. */
-    @Synchronized private fun credit(c:Context):Int {
-        val s=sp(c)
-        val day=LocalDate.now().toString()
-        if(s.getString("rewardDay","")==day)return 0
-        // A dátumot előbb mentjük, így két párhuzamos hálózati válasz sem dupláz.
-        s.edit().putString("rewardDay",day).commit()
-        val paid = Store.addStudyReward(c, 180, "Duolingo-jutalom")
-        ProgressStore.earned(c,paid)
-        return paid
+    /** A képernyőidő-jutalom egyszeri, az igazolt XP növekedését napközben is követjük. */
+    @Synchronized private fun record(
+        c: Context, id: Long, profile: JSONObject, providerDay: LocalDate, zone: ZoneId, summaryXp: Int
+    ): DuoCheck {
+        val prefs = sp(c)
+        if (prefs.getLong("userId", 0L) != id) {
+            return DuoCheck(false, false, streak(c), todayXp(c), "Megváltozott a mentett profil. Frissíts újra.")
+        }
+        val day = LocalDate.now()
+        val key = day.toString()
+        val sameObservation = prefs.getString("xpDay", "") == key &&
+            prefs.getLong("observationAccount", 0L) == id
+        val rawStreak = maxOf(profile.optInt("streak", 0),
+            profile.optJSONObject("streakData")?.optJSONObject("currentStreak")?.optInt("length", 0) ?: 0)
+        val total = profile.optInt("totalXp", -1)
+        val baseline = if (sameObservation) prefs.getInt("observedTotal", -1) else -1
+        val deltaXp = if (providerDay == day && baseline >= 0 && total >= baseline) total - baseline else 0
+        val profileXp = if (providerDay == day) profile.optInt("xpToday", 0) else 0
+        val xp = maxOf(summaryXp, profileXp, deltaXp, if (sameObservation) prefs.getInt("todayXp", 0) else 0)
+        val newBaseline = when {
+            baseline >= 0 -> baseline
+            total >= 0 && xp > 0 -> (total - xp).coerceAtLeast(0)
+            else -> total
+        }
+        val completed = providerDay == day && (xp > 0 || profile.optBoolean("xpGoalMetToday", false) ||
+            DuoEvidence.verifiedStreak(profile, providerDay, zone) ||
+            (sameObservation && rawStreak > prefs.getInt("lastStreak", rawStreak)))
+        val xpAdded = if (completed) ProgressStore.awardXp(c, if (xp > 0) xp else 20, "duolingo_$key") else 0
+        val paid = if (completed && !rewardedToday(c)) {
+            val credited = Store.claimStudyReward(c, 180, "duolingo") ?: 0
+            prefs.edit().putString("rewardDay", key).commit()
+            ProgressStore.earned(c, credited)
+            credited
+        } else 0
+        val message = when {
+            completed && (paid > 0 || xpAdded > 0) -> buildString {
+                append("Mai Duolingo-gyakorlás igazolva.")
+                if (xpAdded > 0) append(" +$xpAdded Fókusz XP.")
+                if (paid > 0) append(" +${duration(paid)} képernyőidő.")
+            }
+            completed || rewardedToday(c) -> "A mai Duolingo-jutalmat már megkaptad."
+            else -> "Még nincs igazolt mai gyakorlás. Frissíts egy lecke után, hogy mérhető legyen az XP-változás."
+        }
+        prefs.edit().putString("xpDay", key).putLong("observationAccount", id)
+            .putInt("observedTotal", newBaseline).putInt("lastStreak", rawStreak).putInt("todayXp", xp)
+            .putString("lastMessage", message).commit()
+        return DuoCheck(true, completed, rawStreak, xp, message, paid)
     }
 
-    suspend fun check(c:Context):DuoCheck=withContext(Dispatchers.IO) {
-        if(!linked(c))return@withContext DuoCheck(false,false,0,0,
+    suspend fun check(c: Context): DuoCheck = withContext(Dispatchers.IO) {
+        if (!linked(c)) return@withContext DuoCheck(false, false, 0, 0,
             "A Duolingo-fülön add meg a felhasználóneved.")
         try {
-            val profile=lookup(username(c))
-            val id=profile.optLong("id",sp(c).getLong("userId",0L))
-            val streak= maxOf(profile.optInt("streak",0),
-                profile.optJSONObject("streakData")?.optJSONObject("currentStreak")
-                    ?.optInt("length",0) ?: 0)
-            val zone=try {
-                ZoneId.of(profile.optString("timezone",ZoneId.systemDefault().id))
-            }catch (_:Exception){ZoneId.systemDefault()}
-            val today=LocalDate.now(zone)
-            var xp=0
-            if(id>0) {
+            val name = username(c)
+            val profile = lookup(name)
+            val id = profile.optLong("id", sp(c).getLong("userId", 0L))
+            val zone = runCatching { ZoneId.of(profile.optString("timezone", ZoneId.systemDefault().id)) }
+                .getOrDefault(ZoneId.systemDefault())
+            val today = LocalDate.now(zone)
+            val summary = if (id > 0 && today == LocalDate.now()) {
                 try {
-                    val from=today.minusDays(1).toString()
-                    val until=today.plusDays(1).toString()
-                    val address="https://www.duolingo.com/2017-06-30/users/$id/xp_summaries"+
-                        "?startDate=$from&endDate=$until&timezone="+
-                        URLEncoder.encode(zone.id,"UTF-8")
-                    val response=request(address).trim()
-                    val summaries=if(response.startsWith("["))JSONArray(response)
-                        else JSONObject(response).optJSONArray("summaries") ?: JSONArray()
-                    for(i in 0 until summaries.length()) {
-                        val item=summaries.optJSONObject(i) ?: continue
-                        val recorded=item.optLong("date",0L)
-                        val day=try{
-                            Instant.ofEpochSecond(recorded).atZone(ZoneOffset.UTC).toLocalDate()
-                        } catch (_:Exception){null}
-                        if(day==today && !item.optBoolean("frozen",false))
-                            xp+=item.optInt("gainedXp",0).coerceAtLeast(0)
-                    }
-                } catch (_:Exception) { /* A nyilvános XP-végpont nem mindig elérhető. */ }
-            }
-            // Az xpGoalMetToday csak akkor számít, ha a profil ezt tényleg visszaadja.
-            val hasGoal=profile.optBoolean("xpGoalMetToday",false)
-            val completed= (xp>0 || hasGoal) && today==LocalDate.now()
-            val paid=if(completed)credit(c)else 0
-            val message=when {
-                completed && paid>0 -> "✅ Mai Duolingo teljesítve! +"+duration(paid)+
-                    " képernyőidő jóváírva."
-                completed -> "✅ A mai Duolingo már teljesítve, a napi jutalom felhasználva."
-                else -> "⏳ Ma még nem látszik ellenőrzött Duolingo XP. Gyakorolj, majd frissíts!"
-            }
-            sp(c).edit().putInt("lastStreak",streak).putInt("todayXp",xp)
-                .putString("lastMessage",message).putLong("lastChecked",System.currentTimeMillis())
-                .commit()
-            DuoCheck(true,completed,streak,xp,message,paid)
-        } catch(e:Exception){
-            val message="Sikertelen Duolingo-ellenőrzés: "+
-                (e.localizedMessage ?: "a nem hivatalos API nem válaszol")
-            sp(c).edit().putString("lastMessage",message).commit()
-            DuoCheck(false,false,streak(c),todayXp(c),message)
+                    val address = "https://www.duolingo.com/2017-06-30/users/$id/xp_summaries" +
+                        "?startDate=${today.minusDays(1)}&endDate=${today.plusDays(1)}&timezone=" +
+                        URLEncoder.encode(zone.id, "UTF-8")
+                    DuoEvidence.dailyXp(request(address), today, zone)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) { 0 }
+            } else 0
+            record(c, id, profile, today, zone, summary)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            val message = "Sikertelen Duolingo-ellenőrzés: ${failure.localizedMessage ?: "a nyilvános profil nem válaszol"}"
+            sp(c).edit().putString("lastMessage", message).apply()
+            DuoCheck(false, false, streak(c), todayXp(c), message)
         }
     }
     private val reminderHours=listOf(17 to 0,20 to 30,22 to 30)
