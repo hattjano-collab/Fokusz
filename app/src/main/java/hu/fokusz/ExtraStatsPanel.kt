@@ -8,15 +8,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -24,14 +30,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private val GREEN=Color(0xFF7BE7C1)
 private val FG=Color(0xFFF5F7FF)
@@ -40,105 +51,14 @@ private val SUB=Color(0xFFA7B4CC)
 @Composable fun ExtraStatsPanel() {
     val c=LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
-    var bankMinutes by remember {mutableStateOf("")}
-    var bankNotice by remember {mutableStateOf("")}
+    var showChessHistory by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(4000); refresh++ } }
-    val bank=remember(refresh) { TimeBank.ready(c) }
-    val pending=remember(refresh) { TimeBank.waiting(c) }
-    val tomorrow=remember(refresh) { TimeBank.projectedTomorrow(c) }
-    val tomorrowBonus=remember(refresh) { TimeBank.projectedInterest(c) }
-    val todayBonus=remember(refresh) { TimeBank.earnedToday(c) }
-    val (reps,chess,study)=BossQuest.progress(c)
     val days=ProgressStore.recent(c)
     val used=days.sumOf { it.usage }
     val estimate=(7*Store.DAILY-used).coerceAtLeast(0)
     Column(verticalArrangement=Arrangement.spacedBy(15.dp)) {
-        FeatureBox("🏦 IDŐBANK  •  NAPI +10%") {
-            Text("A bankban tárolt virtuális idő minden nap 10%-kal nő. Nincs 120 perces vagy napi befizetési korlát. A ma betett időt holnaptól használhatod.",
-                color=SUB,fontSize=12.sp)
-            Column(Modifier.fillMaxWidth().animateContentSize()
-                .background(Color(0xFF1B3B42),RoundedCornerShape(16.dp))
-                .padding(15.dp),verticalArrangement=Arrangement.spacedBy(5.dp)) {
-                Text("HOLNAPI VÁRHATÓ EGYENLEG",color=SUB,fontSize=11.sp,fontWeight=FontWeight.Bold)
-                Text(duration(tomorrow),color=GREEN,fontSize=29.sp,fontWeight=FontWeight.Black)
-                Text("Holnapi jóváírás: +" + duration(tomorrowBonus),
-                    color=Color(0xFFFFC78D),fontSize=13.sp)
-            }
-            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                Column(Modifier.weight(1f).background(Color(0xFF233148),RoundedCornerShape(14.dp))
-                    .padding(12.dp)) {
-                    Text("MOST ELÉRHETŐ",color=SUB,fontSize=10.sp)
-                    Text(duration(bank),color=FG,fontSize=17.sp,fontWeight=FontWeight.Bold)
-                }
-                Column(Modifier.weight(1f).background(Color(0xFF233148),RoundedCornerShape(14.dp))
-                    .padding(12.dp)) {
-                    Text("MA FÉLRETÉVE",color=SUB,fontSize=10.sp)
-                    Text(duration(pending),color=FG,fontSize=17.sp,fontWeight=FontWeight.Bold)
-                }
-            }
-            if(todayBonus>0) Text("✓ A mai napi kamat: +" + duration(todayBonus),
-                color=GREEN,fontSize=13.sp)
-            Text("Bármennyi saját virtuális percet félretehetsz, amennyi az egyenlegeden van.",
-                color=SUB,fontSize=12.sp)
-            OutlinedTextField(
-                value=bankMinutes,
-                onValueChange={v->if(v.length<=9&&v.all(Char::isDigit))bankMinutes=v},
-                label={Text("Összeg percben (nincs napi korlát)")},
-                modifier=Modifier.fillMaxWidth(),singleLine=true)
-            val customAmount=bankMinutes.toLongOrNull()?.let {
-                (it*60L).takeIf{value->value in 1..Store.MAX_SAFE_SECONDS.toLong()}
-                    ?.toInt()
-            }?:0
-            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                Button(onClick={
-                    bankNotice=if(TimeBank.deposit(c,customAmount))
-                        "✓ Befizetve. Holnap kivehető." else "Nincs elég saját idő."
-                    refresh++
-                },enabled=customAmount>0&&customAmount<=Store.bal(c),
-                    modifier=Modifier.weight(1f)){Text("BETESZEM")}
-                OutlinedButton(onClick={
-                    bankNotice=if(TimeBank.withdraw(c,customAmount))
-                        "✓ Kivéve a személyes egyenlegedre."else"Nincs ennyi elérhető banki idő."
-                    refresh++
-                },enabled=customAmount>0&&customAmount<=bank,
-                    modifier=Modifier.weight(1f)){Text("KIVESZEM")}
-            }
-            OutlinedButton(onClick={
-                val all=Store.bal(c)
-                bankNotice=if(TimeBank.deposit(c,all))"✓ Teljes egyenleg félretéve."
-                    else"Nem sikerült a befizetés."
-                refresh++
-            },enabled=Store.bal(c)>0,modifier=Modifier.fillMaxWidth()){
-                Text("TELJES SAJÁT EGYENLEG BETÉTELE")
-            }
-            if(bankNotice.isNotBlank())Text(bankNotice,color=GREEN,fontSize=12.sp)
-            Text("Az összeg a befizetés után rögtön frissül. Az éjfél utáni napi növekedést az app megnyitásakor és nyitott képernyőn is elszámolja. Kerekítés egész másodpercre.",
-                color=SUB,fontSize=11.sp)
-        }
-        FeatureBox("👑 HETI BOSS QUEST") {
-            Text("Teljesítsd mindhárom célt egy naptári héten. Jutalom: +15 perc és Boss-jelvény.",
-                color=SUB,fontSize=12.sp)
-            val goals=listOf(
-                Triple("Fekvőtámasz",reps,100),
-                Triple("Befejezett sakkmeccs",chess,10),
-                Triple("Tanulás másodpercben",study,10800)
-            )
-            for((label,value,target) in goals) {
-                Row {
-                    Text(label,modifier=Modifier.weight(1f),color=FG,fontSize=12.sp)
-                    Text(if(target>=3600) duration(value)+"/3 óra" else
-                        value.toString()+"/"+target,color=GREEN,fontSize=12.sp)
-                }
-                LinearProgressIndicator(progress={(value.toFloat()/target).coerceIn(0f,1f)},
-                    modifier=Modifier.fillMaxWidth().height(8.dp),
-                    color=GREEN,trackColor=Color(0xFF32415C))
-            }
-            if(BossQuest.claimed(c)) Text("🏅 Heti Boss legyőzve!",color=GREEN,
-                fontWeight=FontWeight.Bold)
-            else Button(onClick={if(BossQuest.claim(c))refresh++},
-                enabled=BossQuest.ready(c),modifier=Modifier.fillMaxWidth(),
-                colors=ButtonDefaults.buttonColors(containerColor=GREEN,
-                    contentColor=Color(0xFF0B1020))) {Text("BOSS JUTALOM FELVÉTELE")}
+        FeatureBox("HETI SZEMÉLYES BOSS FIGHT") {
+            PersonalBossPanel()
         }
         FeatureBox("♟️ SAKKSTATISZTIKA") {
             val w=ChessVerifier.wins(c)
@@ -150,8 +70,15 @@ private val SUB=Color(0xFFA7B4CC)
                 fontWeight=FontWeight.Bold)
             Text("Jutalom minden újonnan ellenőrzött sakkjátszmáért: győzelem +1 perc, vereség +30 másodperc, döntetlen +45 másodperc.",
                 color=SUB,fontSize=12.sp)
-            Text("Sakkfiók: "+(if(ChessVerifier.isLinked(c))
-                ChessVerifier.username(c) else "Nincs összekötve"),color=SUB)
+            val accounts = ChessVerifier.accounts(c).joinToString(" · ") { it.label }
+            Text(accounts.ifEmpty { "Nincs összekötött sakkfiók." }, color = SUB)
+            OutlinedButton(
+                onClick = { showChessHistory = true },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Sakkjutalmak naplója") }
+            if (showChessHistory) {
+                ChessRewardHistoryDialog(refresh, total) { showChessHistory = false }
+            }
         }
         FeatureBox("📉 BECSÜLT MEGTAKARÍTOTT IDŐ") {
             Text(duration(estimate),color=GREEN,fontSize=28.sp,fontWeight=FontWeight.ExtraBold)
@@ -173,4 +100,63 @@ private val SUB=Color(0xFFA7B4CC)
                 color=SUB,fontSize=12.sp)
         }
     }
+}
+
+@Composable
+private fun ChessRewardHistoryDialog(refresh: Int, totalGames: Int, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    var rewards by remember { mutableStateOf<List<ChessReward>?>(null) }
+    var linkError by remember { mutableStateOf(false) }
+    val dateFormat = remember {
+        DateTimeFormatter.ofPattern("yyyy. MM. dd. HH:mm", Locale.forLanguageTag("hu-HU"))
+            .withZone(ZoneId.systemDefault())
+    }
+    LaunchedEffect(context, refresh) { rewards = ChessVerifier.rewardHistory(context) }
+
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Sakkjutalmak naplója") },
+        text = {
+            val history = rewards
+            if (history == null) {
+                Text("Betöltés…")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (totalGames > history.size) {
+                        Text("A régebbi partikból az alkalmazás összesített statisztikát mentett.",
+                            fontSize = 12.sp)
+                    }
+                    if (linkError) Text("A játszma linkjét nem sikerült megnyitni.")
+                    if (history.isEmpty()) {
+                        Text("A következő ellenőrzött partid részletei itt jelennek meg.")
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(history, key = { it.id }) { reward ->
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("${reward.platform.label} · ${reward.opponent ?: "Ismeretlen ellenfél"}",
+                                        fontWeight = FontWeight.Bold)
+                                    val credit = reward.creditedSeconds
+                                    Text("${reward.outcome.label} · Jóváírva: " +
+                                        if (credit > 0) "+${duration(credit)}" else "0 mp")
+                                    Text("Parti: ${dateFormat.format(reward.playedAt)}", fontSize = 12.sp)
+                                    Text("Ellenőrizve: ${dateFormat.format(reward.verifiedAt)}", fontSize = 12.sp)
+                                    reward.gameUrl?.let { url ->
+                                        TextButton(onClick = {
+                                            linkError = runCatching { uriHandler.openUri(url) }.isFailure
+                                        }) { Text("Eredeti játszma megnyitása") }
+                                    }
+                                    HorizontalDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Bezárás") } }
+    )
 }

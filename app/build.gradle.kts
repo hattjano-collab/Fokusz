@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "hu.fokusz"
     compileSdk = 35
-    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 14; versionName = "2.8" }
+    defaultConfig { applicationId = "hu.fokusz"; minSdk = 26; targetSdk = 35; versionCode = 19; versionName = "3.3" }
     buildFeatures { compose = true }
     // A nagy, helyi ML Kit modellhez tartozó natív könyvtárakat tömörítve
     // csomagoljuk, hogy mobilon/tableten kisebb legyen az APK.
@@ -29,8 +29,8 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
     implementation("androidx.camera:camera-view:1.4.2")
-    implementation("androidx.webkit:webkit:1.13.0")
     implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("com.google.zxing:core:3.5.4")
