@@ -78,7 +78,6 @@ class FocusService : Service() {
         CloudTeams.start(this)
         QuestStore.resetClock(this)
         UserQuests.resetClock(this)
-        FocusPrefs.resetClock(this)
         handler.post(pulse)
     }
 
@@ -87,11 +86,12 @@ class FocusService : Service() {
         val pi=PendingIntent.getActivity(this,0,intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val custom = UserQuests.active(this)
+        val focus = FocusPrefs.focusTimer(this)
         val part=when {
             custom != null && custom.left > 0 -> "Saját quest: " + clock(custom.left)
             QuestStore.isTimerLocked(this) -> "Quest: "+clock(QuestStore.secondsLeft(this))
-            FocusPrefs.focusLocked(this) -> "Fókusz: "+clock(FocusPrefs.focusLeft(this))+
-                (if(FocusPrefs.focusPaused(this))" (szünet)" else "")
+            focus != null && focus.secondsLeft > 0 -> "Fókusz: " + clock(focus.secondsLeft) +
+                (if (focus.paused) " (szünet)" else "")
             else -> "Maradék képernyőidő: "+clock(Store.bal(this))
         }
         val reminder=CalendarStore.reminderText(this)
@@ -117,7 +117,6 @@ class FocusService : Service() {
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         QuestStore.tick(this)
         UserQuests.tick(this)
-        FocusPrefs.tick(this)
         CloudTeams.pulse(this)
         val elapsed=SystemClock.elapsedRealtime()
         if(elapsed-lastNotification>=20000L) {

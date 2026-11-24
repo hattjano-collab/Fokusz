@@ -183,7 +183,8 @@ private val C = Color(0xFF273750)
     }
     val ready = serviceOn && usageOk && overlayOk
     val phase = remember(ctx, refresh) { FocusPrefs.focusPhase(ctx) }
-    val left = remember(ctx, refresh) { FocusPrefs.focusLeft(ctx) }
+    val timer = remember(ctx, refresh) { FocusPrefs.focusTimer(ctx) }
+    val left = timer?.secondsLeft ?: 0
     val subjects = remember(ctx, subjectRevision) { FocusSubjects.all(ctx) }
     val selectedSubject = subjects.firstOrNull { it.id == selectedSubjectId } ?: FocusSubjects.general
     val subjectId = if (phase == 0) selectedSubject.id else FocusPrefs.focusSubjectId(ctx)
@@ -250,7 +251,7 @@ private val C = Color(0xFF273750)
                     if (startError.isNotEmpty()) Text(startError, color = Color(0xFFFFC78D))
                 }
                 1 -> {
-                    val paused = FocusPrefs.focusPaused(ctx)
+                    val paused = timer?.paused == true
                     Text(if (left == 0) "AZ IDŐ LETELT" else if (paused) "SZÜNET" else "TANULÁS FOLYAMATBAN",
                         color = if (paused) Color(0xFFFFC78D) else A, fontWeight = FontWeight.Bold)
                     Text(clock(left), color = W, fontSize = 58.sp, fontWeight = FontWeight.ExtraBold,
@@ -260,7 +261,12 @@ private val C = Color(0xFF273750)
                     }, color = A, trackColor = C, modifier = Modifier.fillMaxWidth().height(10.dp)
                         .clip(RoundedCornerShape(9.dp)))
                     if (left > 0) {
-                        val pauseUsed = FocusPrefs.pauseUsed(ctx)
+                        timer?.let {
+                            val end = java.time.Instant.ofEpochMilli(it.endsAtMillis).atZone(java.time.ZoneId.systemDefault())
+                            val time = end.format(DateTimeFormatter.ofPattern("HH:mm"))
+                            Text(if (paused) "Vége automatikus folytatással: $time" else "Vége: $time", color = A)
+                        }
+                        val pauseUsed = timer?.pauseSecondsUsed ?: 0
                         Text("Szünetből felhasznált: $pauseUsed/300 mp", color = M, fontSize = 12.sp)
                         SmallSecondary(if (paused) "TANULÁS FOLYTATÁSA" else "5 PERCES SZÜNETKERET",
                             enabled = paused || pauseUsed < 300) {
@@ -268,7 +274,7 @@ private val C = Color(0xFF273750)
                             refresh++
                         }
                         if (!ready) {
-                            Text("A háttérvédelem leállt. Az időzítő a visszakapcsolásig szünetel.",
+                            Text("Az időzítő tovább fut. Az appkorlátozásokhoz indítsd újra a háttérvédelmet.",
                                 color = Color(0xFFFFC78D), fontSize = 12.sp)
                             SmallSecondary("Védelem és engedélyek", onClick = openTimeTab)
                         }

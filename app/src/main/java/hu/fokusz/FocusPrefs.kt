@@ -2,8 +2,11 @@ package hu.fokusz
 
 import android.content.Context
 import android.os.SystemClock
+import android.provider.Settings
 import org.json.JSONArray
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
 internal enum class FocusAppRule(val label: String) {
     DEFAULT("Alapértelmezett"), ALLOW("Engedélyezve"), BLOCK("Tiltva")
@@ -128,9 +131,8 @@ object FocusPrefs {
         if (seconds !in 900..7200) return false
         return synchronized(this) {
             if (focusPhase(c) == 1) return@synchronized false
-            focus(c).edit().putInt("phase", 1).putInt("target", seconds).putLong("elapsed", 0L)
-                .putBoolean("paused", false).putLong("pauseSpent", 0L)
-                .putLong("last", SystemClock.elapsedRealtime())
+            val deadline = FocusDeadline.start(sampleTime(c), seconds * 1000L)
+            focus(c).edit().putInt("phase", 1).putInt("target", seconds).putDeadline(deadline)
                 .putString("sessionId", java.util.UUID.randomUUID().toString())
                 .putString("subjectId", subject.id).putString("subjectName", subject.name)
                 .putStringSet("subjectApps", subject.packages).remove("note").commit()
@@ -156,51 +158,79 @@ object FocusPrefs {
             .sortedByDescending { it.finishedAt }
     }
 
-    fun focusPaused(c:Context):Boolean=focus(c).getBoolean("paused",false)
-    fun pauseUsed(c:Context):Int=(focus(c).getLong("pauseSpent",0L)/1000L).toInt()
-    @Synchronized fun togglePause(c:Context):Boolean {
-        if(focusPhase(c)!=1 || focusLeft(c)==0) return false
-        val s=focus(c)
-        if(!focusPaused(c) && pauseUsed(c)>=300) return false
-        s.edit().putBoolean("paused",!focusPaused(c))
-            .putLong("last",SystemClock.elapsedRealtime()).commit()
-        return true
+    private val deadlineMigration = Any()
+    @Volatile private var cachedBoot: Int? = null
+
+    private fun sampleTime(c: Context): FocusTime {
+        val boot = cachedBoot ?: runCatching {
+            Settings.Global.getInt(c.contentResolver, Settings.Global.BOOT_COUNT, -1)
+        }.getOrDefault(-1).also { cachedBoot = it }
+        return FocusTime(System.currentTimeMillis(), SystemClock.elapsedRealtime(), boot)
     }
-    @Synchronized fun tick(c: Context) {
-        if (focusPhase(c) != 1) return
-        val s = focus(c)
-        val now = SystemClock.elapsedRealtime()
-        val last = s.getLong("last", 0L)
-        val delta = if (last > 0 && now >= last) (now - last).coerceIn(0, 1500) else 0
-        if(focusPaused(c)) {
-            val paused=(s.getLong("pauseSpent",0L)+delta).coerceAtMost(300000L)
-            s.edit().putLong("pauseSpent",paused).putLong("last",now)
-                .putBoolean("paused",paused<300000L).apply()
-        } else {
-            val elapsed = (s.getLong("elapsed", 0L) + delta).coerceAtMost(focusTarget(c) * 1000L)
-            s.edit().putLong("elapsed", elapsed).putLong("last", now).apply()
+
+    private fun android.content.SharedPreferences.Editor.putDeadline(deadline: FocusDeadline) =
+        putLong("deadlineMillis", deadline.deadlineMillis)
+            .putLong("clockWall", deadline.origin.wallMillis).putLong("clockElapsed", deadline.origin.elapsedMillis)
+            .putInt("clockBoot", deadline.origin.boot)
+            .putLong("pausedAtMillis", deadline.pausedAtMillis).putLong("pauseSpent", deadline.pauseSpentMillis)
+            .remove("elapsed").remove("paused").remove("last")
+
+    private fun readDeadline(values: Map<String, *>): FocusDeadline? {
+        val end = values["deadlineMillis"] as? Long ?: return null
+        val start = FocusTime(
+            values["clockWall"] as? Long ?: return null,
+            values["clockElapsed"] as? Long ?: return null,
+            values["clockBoot"] as? Int ?: -1
+        )
+        val pauseSpent = (values["pauseSpent"] as? Long ?: 0L)
+            .coerceIn(0L, FocusDeadline.PAUSE_LIMIT_MILLIS)
+        return FocusDeadline(start, end, values["pausedAtMillis"] as? Long ?: 0L, pauseSpent)
+    }
+
+    private fun activeDeadline(c: Context, time: FocusTime): FocusDeadline? {
+        val p = focus(c)
+        val values = p.all
+        if (values["phase"] != 1) return null
+        return readDeadline(values) ?: synchronized(deadlineMigration) {
+            val latest = p.all
+            if (latest["phase"] != 1) return@synchronized null
+            readDeadline(latest)?.let { return@synchronized it }
+            // A korábbi verzió csak az elhasznált időt mentette.
+            val remaining = (latest["target"] as? Int ?: 1500) * 1000L - (latest["elapsed"] as? Long ?: 0L)
+            val migrated = FocusDeadline.start(time, remaining, latest["pauseSpent"] as? Long ?: 0L,
+                latest["paused"] == true)
+            if (p.edit().putDeadline(migrated).commit()) migrated else null
         }
     }
-    @Synchronized fun resetClock(c: Context) {
-        if (focusPhase(c) == 1) focus(c).edit().putLong("last", SystemClock.elapsedRealtime()).apply()
+
+    internal fun focusTimer(c: Context): FocusTimer? {
+        val time = sampleTime(c)
+        return activeDeadline(c, time)?.view(time)
     }
-    fun focusLeft(c: Context): Int =
-        ((focusTarget(c) * 1000L - focus(c).getLong("elapsed", 0L)).coerceAtLeast(0L) + 999L).div(1000).toInt()
-    fun focusLocked(c: Context) = focusPhase(c) == 1 && focusLeft(c) > 0
+
+    @Synchronized fun togglePause(c: Context): Boolean {
+        val time = sampleTime(c)
+        val next = activeDeadline(c, time)?.togglePause(time) ?: return false
+        return focus(c).edit().putDeadline(next).commit()
+    }
+
+    fun focusLocked(c: Context): Boolean = (focusTimer(c)?.secondsLeft ?: 0) > 0
     @Synchronized fun claimFocus(c: Context): Boolean {
-        if (focusPhase(c) != 1 || focusLeft(c) > 0) return false
+        val timer = focusTimer(c) ?: return false
+        if (timer.secondsLeft > 0) return false
         val target = focusTarget(c)
         val subjectId = focusSubjectId(c)
         val subjectName = focusSubjectName(c)
         val note = focusNote(c).trim()
         val editor = focus(c).edit().putInt("phase", 2)
         if (note.isNotBlank()) {
-            val result = FocusNote(subjectId, subjectName, System.currentTimeMillis(), target, note)
+            val result = FocusNote(subjectId, subjectName, timer.endsAtMillis, target, note)
             editor.putString("pastNotes", rawFocusNotes(c).put(result.toJson()).toString())
         }
         if (!editor.commit()) return false
         val credited = Store.addStudyReward(c, target / 2, "Fókuszidő jutalma")
-        BossProgress.add(c, "quest_3", target)
+        val completedDay = Instant.ofEpochMilli(timer.endsAtMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+        BossProgress.add(c, "quest_3", target, day = completedDay)
         val title = if (subjectId.isEmpty()) "Mélyfókusz" else "Mélyfókusz · $subjectName"
         ProgressStore.taskFinished(c, "STUDY", target, credited, title = title)
         return true
