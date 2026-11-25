@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import java.time.LocalDate
 import java.util.Locale
 
 private val QBG = Color(0xFF141E32)
@@ -122,13 +123,13 @@ private val QLILAC = Color(0xFFB9AAFF)
     val ctx = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
     var selectedTab by rememberSaveable {
-        mutableStateOf(QuestStore.active(ctx).let { if(it=="push" || it=="extra")it else "chess" })
+        mutableStateOf(QuestStore.active(ctx).ifEmpty { "chess" })
     }
     var cameraOn by remember { mutableStateOf(false) }
+    var cameraDay by remember { mutableStateOf<LocalDate?>(null) }
     var customEditing by remember { mutableStateOf(false) }
     var customTitle by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
-    var chessCount by remember { mutableIntStateOf(0) }
     var chessChecking by remember { mutableStateOf(false) }
     var chessMessage by remember { mutableStateOf("") }
     val chessScope = rememberCoroutineScope()
@@ -140,6 +141,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     }
 
     val quest = remember(refresh) { QuestStore.ensureQuest(ctx) }
+    val workoutSpeech = rememberWorkoutSpeech()
     val p = QuestStore.phase(ctx)
     val doneChess = QuestStore.chessDone(ctx)
     val donePush = QuestStore.pushDone(ctx)
@@ -153,19 +155,25 @@ private val QLILAC = Color(0xFFB9AAFF)
     val serviceReady = serviceOn && usageOk && overlayOk
     val active = QuestStore.active(ctx)
 
+    LaunchedEffect(active) {
+        if (active == "custom") selectedTab = "custom"
+    }
+
     fun update() { refresh++ }
 
-    // Az egyszer mentett fiókot a sakkquest megnyitásakor és utána percenként újraellenőrzi.
+    // A mentett fiókokat a sakkquest megnyitásakor és utána percenként ellenőrzi.
     LaunchedEffect(active, p) {
         if (quest?.kind == QuestKind.CHESS && p == 1 && ChessVerifier.isLinked(ctx)) {
             while (true) {
                 chessChecking = true
-                val progress = ChessVerifier.dailyProgress(ctx)
-                chessChecking = false
+                val progress = try {
+                    ChessVerifier.dailyProgress(ctx)
+                } finally {
+                    chessChecking = false
+                }
                 chessMessage = progress.message
                 if (progress.success) {
-                    chessCount = progress.count
-                    if (QuestStore.verifiedChess(ctx, progress.count)) {
+                    if (QuestStore.verifiedChess(ctx, progress)) {
                         refresh++
                         break
                     }
@@ -176,6 +184,7 @@ private val QLILAC = Color(0xFFB9AAFF)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(17.dp)) {
+        UserQuestPanel(serviceReady)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("NAPI KÜLDETÉSEK", color = QWHITE,
@@ -230,6 +239,9 @@ private val QLILAC = Color(0xFFB9AAFF)
                             textAlign=TextAlign.Center,maxLines=3)
                     }
                 }
+            }
+            if (active == "custom") {
+                QSecondary("✦  EGYÉNI QUEST") { selectedTab = "custom" }
             }
             Text("Bármelyik fülre rányomhatsz. A két alapquest haladása megmarad, az Extra a teljesítésük után nyílik meg.",
                 color=QSOFT,fontSize=12.sp)
@@ -386,6 +398,11 @@ private val QLILAC = Color(0xFFB9AAFF)
                         modifier = Modifier.fillMaxWidth())
                     QPrimary("KÖVETKEZŐ QUEST  ✦") {
                         QuestStore.next(ctx)
+                        if (selectedTab == "custom") {
+                            selectedTab = QuestStore.active(ctx).ifEmpty {
+                                if (QuestStore.chessDone(ctx)) "push" else "chess"
+                            }
+                        }
                         cameraOn = false
                         customEditing = false
                         customTitle = ""
@@ -393,9 +410,10 @@ private val QLILAC = Color(0xFFB9AAFF)
                         update()
                     }
                 } else if (quest.kind == QuestKind.CHESS) {
-                    Text("Sakkfiók: " + ChessVerifier.username(ctx) + " (" +
-                        if(ChessVerifier.platform(ctx)=="lichess") "Lichess)" else "Chess.com)",
-                        color=QSOFT)
+                    val chessCount = ChessVerifier.todayGames(ctx)
+                    val accounts = ChessVerifier.accounts(ctx)
+                    val accountLabels = accounts.joinToString(" · ") { it.label }
+                    Text(accountLabels.ifEmpty { "Nincs összekötött sakkfiók." }, color = QSOFT)
                     Text(chessCount.toString() + " / " + quest.goal + " ellenőrzött mai parti",
                         color=QGREEN, fontSize=22.sp, fontWeight=FontWeight.Bold,
                         textAlign=TextAlign.Center, modifier=Modifier.fillMaxWidth())
@@ -403,7 +421,9 @@ private val QLILAC = Color(0xFFB9AAFF)
                         progress={ (chessCount.toFloat() / quest.goal).coerceIn(0f,1f) },
                         color=QGREEN,trackColor=QEDGE,
                         modifier=Modifier.fillMaxWidth().height(9.dp).clip(CircleShape))
-                    if (p == 0) {
+                    if (accounts.isEmpty()) {
+                        QPrimary("SAKKFIÓK BEÁLLÍTÁSA") { openSettingsTab() }
+                    } else if (p == 0) {
                         Text("A mai " + quest.goal + " meccshez automatikus online ellenőrzés szükséges. A győzelem nem feltétel.",
                             color=QSOFT)
                         QPrimary("♟  SAKKQUEST INDÍTÁSA") { QuestStore.startChess(ctx); update() }
@@ -414,46 +434,61 @@ private val QLILAC = Color(0xFFB9AAFF)
                         QSecondary("MOST ELLENŐRZÖM") {
                             if(!chessChecking) chessScope.launch {
                                 chessChecking=true
-                                val progress=ChessVerifier.dailyProgress(ctx)
-                                chessChecking=false
+                                val progress = try {
+                                    ChessVerifier.dailyProgress(ctx)
+                                } finally {
+                                    chessChecking = false
+                                }
                                 chessMessage=progress.message
                                 if(progress.success) {
-                                    chessCount=progress.count
-                                    QuestStore.verifiedChess(ctx, progress.count)
+                                    QuestStore.verifiedChess(ctx, progress)
                                 }
                                 update()
                             }
                         }
-                        Text("Csak a mentett fiók mai befejezett online játszmái számítanak. Kézi igazolás nincs.",
+                        Text("A mentett fiókok mai befejezett online játszmái együtt számítanak.",
                             color=QSOFT,fontSize=12.sp)
                     }
                 } else if (quest.kind == QuestKind.PUSHUPS || quest.kind == QuestKind.EXERCISE) {
-                    Text("KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
+                    val workoutDay = LocalDate.now()
+                    val reps = QuestStore.reps(ctx)
+                    val remainingReps = (quest.goal - reps).coerceAtLeast(0)
+                    Text(if (quest.mode == "plank") "KAMERÁVAL SZÁMOLT MÁSODPERCEK" else "KAMERÁVAL SZÁMOLT ISMÉTLÉSEK", color = QSOFT,
                         fontWeight = FontWeight.Bold)
-                    Text(QuestStore.reps(ctx).toString() + " / " + quest.goal,
+                    Text("$reps / ${quest.goal}",
                         color = QWHITE, textAlign = TextAlign.Center,
                         fontSize = 48.sp,
                         fontWeight = FontWeight.ExtraBold, modifier = Modifier.fillMaxWidth())
+                    Text(if (quest.mode == "plank") "Hátra: $remainingReps mp" else "Hátra: $remainingReps ismétlés",
+                        color = QGREEN, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                     LinearProgressIndicator(
-                        progress = { QuestStore.reps(ctx).toFloat() / quest.goal },
+                        progress = { (reps.toFloat() / quest.goal).coerceIn(0f, 1f) },
                         color = QGREEN, trackColor = QEDGE,
                         modifier = Modifier.fillMaxWidth().height(9.dp).clip(CircleShape)
                     )
-                    if (!cameraOn) {
-                        QPrimary("KAMERÁS SZÁMLÁLÓ INDÍTÁSA") { cameraOn = true }
-                    } else {
-                        QSecondary("Kamera kikapcsolása") { cameraOn = false }
-                        val onRep:()->Unit={
-                            QuestStore.rep(ctx,quest.id)
-                            update()
+                    if (!cameraOn || cameraDay != workoutDay) {
+                        QPrimary(if (reps == 0) "KAMERÁS SZÁMLÁLÓ INDÍTÁSA" else "FOLYTATÁS KAMERÁVAL") {
+                            cameraDay = workoutDay
+                            cameraOn = true
                         }
-                        if(quest.mode=="pushups") {
-                            WebPushupCamera(questId=quest.id,onRep=onRep)
-                        }else {
-                            PushupCamera(quest.id,mode=quest.mode,onRep=onRep)
+                    } else {
+                        QSecondary("Kamera kikapcsolása") {
+                            workoutSpeech.stop()
+                            cameraOn = false
+                        }
+                        WorkoutCamera(key = "quest_${quest.id}_${quest.mode}", session = "$workoutDay", mode = quest.mode,
+                            speech = workoutSpeech) {
+                            if (LocalDate.now() != workoutDay) null
+                            else {
+                                val before = QuestStore.reps(ctx)
+                                QuestStore.rep(ctx, quest.id)
+                                val after = QuestStore.reps(ctx)
+                                update()
+                                after.takeIf { it > before }
+                            }
                         }
                     }
-                    Text("A kamerás testtartás-felismerés becslés; nem garantálható, hogy minden szabálytalan ismétlést felismer.",
+                    Text("A felismert ismétlések automatikusan mentődnek. A kamerás felismerést a fényviszonyok és a kamera szöge befolyásolja.",
                         color = QSOFT, fontSize = 12.sp)
                 } else {
                     if (p == 0) {

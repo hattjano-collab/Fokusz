@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.activity.compose.setContent
@@ -142,10 +141,12 @@ data class Hand(
 
 class MainActivity : ComponentActivity() {
     private var requestedTab by mutableIntStateOf(-1)
+    private var quizShare by mutableStateOf<QuizShare?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        QuizShare.from(intent)?.let { quizShare = it }
         if(intent.hasExtra("focus_tab"))
             requestedTab=intent.getIntExtra("focus_tab",8)
     }
@@ -153,6 +154,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         requestedTab=intent?.getIntExtra("focus_tab",-1) ?: -1
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) quizShare = QuizShare.from(intent)
         window.statusBarColor = android.graphics.Color.rgb(9,15,31)
         window.navigationBarColor = android.graphics.Color.rgb(9,15,31)
         setContent {
@@ -164,7 +166,11 @@ class MainActivity : ComponentActivity() {
                 onBackground = White,
                 onSurface = White
             )) {
-                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) { FokuszApp(requestedTab) }
+                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) {
+                    FokuszApp(requestedTab, quizShare) { received ->
+                        if (quizShare?.id == received) quizShare = null
+                    }
+                }
             }
         }
     }
@@ -276,10 +282,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable fun FokuszApp(openTab:Int = -1) {
+@Composable internal fun FokuszApp(openTab: Int = -1, quizShare: QuizShare? = null,
+                                 onShareConsumed: (String) -> Unit = {}) {
     val ctx = LocalContext.current
+    val version = remember(ctx) { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }
     var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(openTab) { if(openTab in 0..10) tab=openTab }
+    LaunchedEffect(openTab) { if(openTab in 0..12) tab=openTab }
+    LaunchedEffect(quizShare?.id) { if (quizShare != null) tab = 11 }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
@@ -324,16 +333,16 @@ class MainActivity : ComponentActivity() {
 
     LaunchedEffect(flipCounter) {
         if (flipCounter > 0) {
-            coinRotation.snapTo(0f)
+            val start = (coinRotation.value % 360f + 360f) % 360f
+            val landing = if (coinResult == "Írás") 180f else 0f
+            coinRotation.snapTo(start)
             coinLift.snapTo(0f)
             coroutineScope {
                 launch {
-                    coinRotation.animateTo(1800f, tween(durationMillis=1580, easing=LinearEasing))
+                    coinRotation.animateTo(1800f + landing, tween(durationMillis = 1370,
+                        easing = androidx.compose.animation.core.CubicBezierEasing(.18f, .55f, .3f, 1f)))
                 }
-                launch {
-                    coinLift.animateTo(-120f, tween(durationMillis=730, easing=FastOutSlowInEasing))
-                    coinLift.animateTo(0f, tween(durationMillis=850, easing=FastOutSlowInEasing))
-                }
+                launch { coinLift.animateTo(1f, tween(durationMillis = 1370, easing = LinearEasing)) }
             }
             coinFlipping = false
         }
@@ -342,12 +351,11 @@ class MainActivity : ComponentActivity() {
     fun coinFlip(choice: String) {
         if (!wagerValid || coinFlipping || live) return
         val bet = stake
-        if (!GambleStats.reserve(ctx,bet)) return
-        Store.add(ctx, -bet)
+        if (!GambleStats.reserve(ctx, bet, "Érmedobás tétje")) return
         // Minden dobásnál független, 50-50% esélyű véletlenszám.
         val result = if (Shoe.rnd.nextBoolean()) "Fej" else "Írás"
         val won = result == choice
-        if (won) Store.addUncapped(ctx,bet.toLong()*2L)
+        if (won) Store.addUncapped(ctx, bet.toLong() * 2L, "Érmedobás kifizetése")
         bal = Store.bal(ctx)
         selectedSide = choice
         coinResult = result
@@ -381,7 +389,7 @@ class MainActivity : ComponentActivity() {
                 else -> "VESZTETT · −"+duration(h.bet)
             })
         }
-        Store.addUncapped(ctx,paid)
+        Store.addUncapped(ctx, paid, "Blackjack kifizetése")
         bal=Store.bal(ctx)
         val difference=paid-spent
         val shown=abs(difference).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt()
@@ -402,7 +410,7 @@ class MainActivity : ComponentActivity() {
         if (!wagerValid || live) return
         val bet = stake
         if(!GambleStats.reserve(ctx,bet))return
-        Store.add(ctx, -bet)
+        Store.add(ctx, -bet, "Blackjack tétje")
         val player = listOf(Shoe.draw(), Shoe.draw())
         val dc = listOf(Shoe.draw(), Shoe.draw())
         dealer = dc
@@ -412,7 +420,7 @@ class MainActivity : ComponentActivity() {
         if (playerBJ || dealerBJ) {
             val paid=if(playerBJ&&dealerBJ)bet.toLong()
                      else if(playerBJ)bet.toLong()*5L/2L else 0L
-            Store.addUncapped(ctx,paid)
+            Store.addUncapped(ctx, paid, "Blackjack kifizetése")
             live = false
             bjMessage = when {
                 playerBJ && dealerBJ -> "Mindkét fél blackjack · döntetlen"
@@ -440,14 +448,14 @@ class MainActivity : ComponentActivity() {
     fun doubleDown() {
         val h = hands[active]
         if (bal < h.bet || h.bet>Store.MAX_SAFE_SECONDS/2 || !GambleStats.reserve(ctx,h.bet)) return
-        Store.add(ctx, -h.bet)
+        Store.add(ctx, -h.bet, "Blackjack duplázás tétje")
         next(replaceHand(h.copy(cards = h.cards + Shoe.draw(), bet = h.bet * 2, done = true)))
     }
     fun split() {
         val h = hands[active]
         if (bal < h.bet || hands.size >= 4 || h.cards.size != 2 || rv(h.cards[0]) != rv(h.cards[1])) return
         if(!GambleStats.reserve(ctx,h.bet))return
-        Store.add(ctx, -h.bet)
+        Store.add(ctx, -h.bet, "Blackjack osztás tétje")
         val ace = h.cards[0] % 13 == 0
         val a = Hand(listOf(h.cards[0], Shoe.draw()), h.bet, done = ace, ace = ace)
         val b = Hand(listOf(h.cards[1], Shoe.draw()), h.bet, done = ace, ace = ace)
@@ -471,7 +479,8 @@ class MainActivity : ComponentActivity() {
         drawerContent = {
             ModalDrawerSheet(modifier=Modifier.width(295.dp),
                 drawerContainerColor=Panel) {
-                Column(Modifier.statusBarsPadding().padding(16.dp),
+                Column(Modifier.statusBarsPadding().navigationBarsPadding()
+                    .verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement=Arrangement.spacedBy(7.dp)) {
                     Text("FÓKUSZ",color=Mint,fontWeight=FontWeight.Black,fontSize=24.sp)
                     Text("Válassz funkciót",color=Muted,fontSize=13.sp)
@@ -487,7 +496,9 @@ class MainActivity : ComponentActivity() {
                         Triple(7,"▦","Naptár"),
                         Triple(8,"🔥","Duolingo"),
                         Triple(9,"👥","Csapatok"),
-                        Triple(10,"📚","Xeropan")
+                        Triple(10,"📚","Xeropan"),
+                        Triple(11,"▣","Kvíz fotózása"),
+                        Triple(12,"▤","Időbank")
                     ).forEach { (id,symbol,label) ->
                         NavigationDrawerItem(
                             label={Text(symbol + "   " + label,color=if(tab==id)Mint else White)},
@@ -530,7 +541,8 @@ class MainActivity : ComponentActivity() {
                 Text("☰  MENÜ",fontWeight=FontWeight.Bold)
             }
             Text(listOf("Gambling","Questek","Képernyőidő","Statisztika",
-                "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo","Csapatok").getOrElse(tab) { "Fókusz" },
+                "AI-edző","Fókuszmód","Beállítások","Naptár","Duolingo","Csapatok","Xeropan",
+                "Kvíz fotózása","Időbank").getOrElse(tab) { "Fókusz" },
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
@@ -642,29 +654,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.weight(1f))
                     Text("50% / 50%", color = Muted, fontSize = 12.sp)
                 }
-                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier.size(118.dp)
-                            .graphicsLayer {
-                                rotationY = coinRotation.value % 360f
-                                translationY = coinLift.value.dp.toPx()
-                                cameraDistance = 12.dp.toPx()
-                            }
-                            .shadow(18.dp,CircleShape)
-                            .clip(CircleShape)
-                            .background(Brush.radialGradient(listOf(Color(0xFFFFF1CB), Gold, Color(0xFFB97834))))
-                            .border(5.dp, Color(0xFF8E643B), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (coinFlipping) {
-                                if ((coinRotation.value / 180f).toInt() % 2 == 0) "F" else "Í"
-                            } else if (coinResult == "Fej") "F"
-                            else if (coinResult == "Írás") "Í" else "↻",
-                            color = Color(0xFF513624), fontSize = 55.sp, fontWeight = FontWeight.Black
-                        )
-                    }
-                }
+                BimetalCoin(coinRotation.value, coinLift.value)
                 Text(
                     if (coinFlipping) "FELDOBTAD AZ ÉRMÉT…" else if (coinResult.isEmpty()) "FEJ VAGY ÍRÁS?" else "Eredmény: " + coinResult,
                     modifier = Modifier.fillMaxWidth(), color = White, fontSize = 18.sp,
@@ -802,6 +792,8 @@ class MainActivity : ComponentActivity() {
                 Text("A napi 30 perc minden figyelt alkalmazásra közös. A játékkal szerzett idő hozzáadódik.",
                     color = Muted, fontSize = 12.sp)
             }
+            SocialUnlockSettings()
+            ScreenTimePanel()
             GlassCard {
                 Text("TIPP XIAOMI TELEFONHOZ", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text("A stabil háttérfigyeléshez állíts be korlátozás nélküli akkumulátorhasználatot a Fókusz alkalmazásinformációs oldalán.",
@@ -826,9 +818,13 @@ class MainActivity : ComponentActivity() {
             CloudTeamPanel()
         } else if(tab==10) {
             XeropanPanel()
+        } else if(tab==11) {
+            QuizPhotoPanel(quizShare, onShareConsumed)
+        } else if(tab==12) {
+            TimeBankPanel()
         }
         Spacer(Modifier.height(14.dp))
-        Text("FÓKUSZ  •  2.7", color = Muted.copy(alpha = .6f),
+        Text("FÓKUSZ  •  $version", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
     }
