@@ -98,6 +98,15 @@ object CloudTeams {
     fun leased(c: Context): Int = prefs(c).let {
         if (it.getLong("leaseDay", 0L) == todayUtc().seconds) it.getInt("lease", 0).coerceAtLeast(0) else 0
     }
+    internal fun availableSeconds(c: Context): Long {
+        val id = teamId(c)
+        if (id.isBlank()) return 0
+        val reserved = leased(c).toLong()
+        val team = view
+        if (team.id != id || team.cached) return reserved
+        val remaining = (team.members.size * 300L - prefs(c).getInt(quotaKey(id, todayUtc()), 0)).coerceAtLeast(0)
+        return reserved + minOf(remaining, team.pool.toLong() + team.bank)
+    }
     fun pendingContribution(c:Context)=prefs(c).getString("contribution","")?.isNotBlank()==true
     private suspend fun ensureAuth():String {
         val existing=auth().currentUser

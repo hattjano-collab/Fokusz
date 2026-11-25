@@ -11,6 +11,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Handler
@@ -52,9 +53,19 @@ class FocusService : Service() {
     private val teamSession = TeamTimeSession()
     private var lastEventTime = 0L
     private var currentPackage = ""
+    private var resumedPackage = ""
+    private var resumedClass: String? = null
+    private var previousPackage = ""
     private var cover: View? = null
     private var coverReason: CoverReason? = null
     private var coverDescription: TextView? = null
+    private var unlockOverlay: SocialUnlockOverlay? = null
+    private var unlockPackage = ""
+    private var unlockExpiredMinutes: Int? = null
+    private var unlockDraft = SocialUnlockDraft()
+    private var unlockFinishing = false
+    private var visibleGrant: SocialUnlockGrant? = null
+    private val expiryPulse = Runnable { refreshCover() }
     private var windowManager: WindowManager? = null
     private val background=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private var lastNotification=0L
@@ -64,8 +75,9 @@ class FocusService : Service() {
 
     private val pulse = object : Runnable {
         override fun run() {
+            val next = SystemClock.uptimeMillis() + 1000L
             try { monitor() } catch (_: Exception) { hideCover() }
-            handler.postDelayed(this, 1000L)
+            handler.postAtTime(this, next)
         }
     }
 
@@ -113,8 +125,72 @@ class FocusService : Service() {
         return START_STICKY
     }
 
-    private fun monitor() {
+    private fun refreshCover() {
+        try { monitor(allowCharge = false) } catch (_: Exception) { hideCover() }
+    }
+
+    private fun monitor(allowCharge: Boolean = true) {
+        handler.removeCallbacks(expiryPulse)
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
+        if (allowCharge) updateBackgroundWork()
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            teamSession.clear()
+            visibleGrant = null
+            unlockDraft = SocialUnlockDraft()
+            hideCover()
+            return
+        }
+        readForeground()
+        val pkg = currentPackage
+        if (pkg.isBlank() || FocusPrefs.isEssential(this, pkg) || QuizDraft.isCameraActive(pkg)) {
+            teamSession.clear()
+            hideCover()
+            return
+        }
+        val restrictions = restrictions()
+        if (blockedByTimer(pkg, restrictions)) {
+            teamSession.clear()
+            showCover(CoverReason.QUEST, timerDescription(restrictions))
+            return
+        }
+        if (SocialUsage.dailyLimitReached(this, pkg)) {
+            teamSession.clear()
+            showCover(CoverReason.APP_LIMIT)
+            return
+        }
+        val selected = SocialUnlockStore.selected(this, pkg)
+        val chargeBalance = selected || (!restrictions.focusRulesActive && FocusPrefs.blocked(this, pkg))
+        if (!chargeBalance) {
+            if (allowCharge) SocialUsage.recordSecond(this, pkg, advanceBreak = false)
+            teamSession.clear()
+            visibleGrant = null
+            hideCover()
+            return
+        }
+        val socialApp = selected || pkg in SocialUnlockStore.standardPackages
+        val breakLeft = if (socialApp) SocialUsage.breakSecondsLeft(this) else 0
+        if (breakLeft > 0) {
+            showBreak(breakLeft)
+            return
+        }
+        val time = if (selected) FocusPrefs.sampleTime(this) else null
+        val grant = time?.let { SocialUnlockStore.current(this, pkg, it) }
+        if (time != null && grant != null) {
+            visibleGrant = grant
+            handler.postDelayed(expiryPulse, grant.millisLeft(time))
+        }
+        if (selected && !restrictions.emergency && grant == null) {
+            val expiredMinutes = visibleGrant?.takeIf { it.packageName == pkg }?.minutes
+            showUnlock(pkg, expiredMinutes)
+            return
+        }
+        if (unlockFinishing) return
+        if (unlockOverlay != null) hideCover()
+        if (allowCharge) chargeSecond(pkg, grant, restrictions.emergency, socialApp)
+    }
+
+    private fun updateBackgroundWork() {
         QuestStore.tick(this)
         UserQuests.tick(this)
         CloudTeams.pulse(this)
@@ -138,77 +214,87 @@ class FocusService : Service() {
             lastDuolingoSync=elapsed
             background.launch { DuolingoStore.check(this@FocusService) }
         }
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
-            teamSession.clear()
-            hideCover()
-            return
-        }
+    }
+
+    private fun readForeground() {
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
         if (lastEventTime > now) lastEventTime = 0L
         val window = if (lastEventTime == 0L) 30 * 60_000L else 30_000L
-        val events = us.queryEvents(now - window, now) ?: return
+        val windowStart = maxOf(lastEventTime, now - window)
+        val events = us.queryEvents(windowStart, now) ?: return
         val ev = UsageEvents.Event()
         val previouslySeen = lastEventTime
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
             if (ev.timeStamp <= previouslySeen) continue
             when (ev.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED -> currentPackage = ev.packageName.orEmpty()
-                UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    if (currentPackage == ev.packageName) currentPackage = ""
+                UsageEvents.Event.ACTIVITY_RESUMED -> {
+                    val pkg = ev.packageName.orEmpty()
+                    if (pkg != resumedPackage) {
+                        previousPackage = resumedPackage
+                        resumedPackage = pkg
+                        visibleGrant = null
+                        unlockDraft = SocialUnlockDraft()
+                        if (unlockOverlay != null) hideCover()
+                    }
+                    resumedClass = ev.className
+                    currentPackage = pkg
+                }
+                UsageEvents.Event.ACTIVITY_PAUSED -> {
+                    if (currentPackage == ev.packageName && resumedClass == ev.className) currentPackage = ""
                 }
                 else -> continue
             }
             lastEventTime = ev.timeStamp
         }
+    }
+
+    private data class Restrictions(
+        val questLocked: Boolean,
+        val legacyCustom: Boolean,
+        val userQuest: Boolean,
+        val focusLocked: Boolean,
+        val subjectApps: Set<String>?,
+        val emergency: Boolean,
+    ) {
+        val focusRulesActive: Boolean get() = focusLocked || legacyCustom || userQuest
+    }
+
+    private fun restrictions(): Restrictions {
         val questLocked = QuestStore.isTimerLocked(this)
         val legacyCustom = questLocked && QuestStore.isCustomTimerLocked(this)
         val userQuest = UserQuests.locked(this)
         val focusLocked = FocusPrefs.focusLocked(this)
-        if (currentPackage.isBlank() || FocusPrefs.isEssential(this, currentPackage) ||
-            QuizDraft.isCameraActive(currentPackage)) {
-            teamSession.clear()
-            hideCover()
-            return
-        }
-        val focusRulesActive = focusLocked || legacyCustom || userQuest
         val subjectApps = when {
             userQuest -> UserQuests.subjectApps(this)
             legacyCustom -> FocusPrefs.selectedSubject(this).packages
             else -> null
         }
-        val emergency = FocusPrefs.emergencyActive(this)
-        val normalQuestBlock = questLocked && !legacyCustom && !emergency &&
-            (FocusPrefs.blocked(this, currentPackage) || currentPackage in Store.BLOCKED ||
-                currentPackage in Store.QUEST_SOCIAL)
-        if ((focusRulesActive && !FocusPrefs.allowedDuringFocus(this, currentPackage, subjectApps)) || normalQuestBlock) {
-            teamSession.clear()
-            showCover(CoverReason.QUEST)
-            return
-        }
-        if (SocialUsage.dailyLimitReached(this, currentPackage)) {
-            teamSession.clear()
-            showCover(CoverReason.APP_LIMIT)
-            return
-        }
-        val chargeBalance = !focusRulesActive && FocusPrefs.blocked(this, currentPackage)
-        if (!chargeBalance) {
-            SocialUsage.recordSecond(this, currentPackage, advanceBreak = false)
-            teamSession.clear()
-            hideCover()
-            return
-        }
-        val socialApp = currentPackage in Store.BLOCKED || currentPackage in Store.QUEST_SOCIAL ||
-            FocusPrefs.socialChoices.any { it.second == currentPackage }
-        val breakLeft = if (socialApp) SocialUsage.breakSecondsLeft(this) else 0
-        if (breakLeft > 0) {
-            showBreak(breakLeft)
-            return
-        }
+        return Restrictions(questLocked, legacyCustom, userQuest, focusLocked, subjectApps,
+            FocusPrefs.emergencyActive(this))
+    }
 
-        val spendReason = ScreenTimeLedger.socialReason(currentPackage)
+    private fun blockedByTimer(pkg: String, rules: Restrictions): Boolean {
+        val normalQuestBlock = rules.questLocked && !rules.legacyCustom && !rules.emergency &&
+            (FocusPrefs.blocked(this, pkg) || pkg in Store.BLOCKED || pkg in Store.QUEST_SOCIAL ||
+                SocialUnlockStore.selected(this, pkg))
+        return normalQuestBlock || (rules.focusRulesActive && !FocusPrefs.allowedDuringFocus(this, pkg, rules.subjectApps))
+    }
+
+    private fun timerDescription(rules: Restrictions): String {
+        val timers = buildList {
+            if (rules.focusLocked) FocusPrefs.focusTimer(this@FocusService)?.let { timer ->
+                add("Fókusz: ${clock(timer.secondsLeft)}${if (timer.paused) " (szünet)" else ""}")
+            }
+            if (rules.questLocked) add("Quest: ${clock(QuestStore.secondsLeft(this@FocusService))}")
+            if (rules.userQuest) UserQuests.active(this@FocusService)?.let { add("Saját quest: ${clock(it.left)}") }
+        }
+        return "Az aktív fókusz vagy quest tiltja ezt az alkalmazást.\n${timers.joinToString("\n")}".trimEnd()
+    }
+
+    private fun chargeSecond(pkg: String, unlock: SocialUnlockGrant?, emergency: Boolean, socialApp: Boolean) {
+        val spendReason = ScreenTimeLedger.socialReason(pkg)
         val threshold = ScreenTimeAlerts.warningSeconds(this)
         val today = LocalDate.now()
         val personalBefore = Store.bal(this)
@@ -241,9 +327,100 @@ class FocusService : Service() {
         }
         if (spentTeam) ScreenTimeLedger.record(this, "$spendReason · csapatkeret", -1)
         ProgressStore.used(this, 1)
-        val newBreak = SocialUsage.recordSecond(this, currentPackage,
+        if (unlock != null) SocialUnlockStore.recordSecond(this, unlock)
+        val newBreak = SocialUsage.recordSecond(this, pkg,
             advanceBreak = socialApp && (spentPersonal || spentTeam))
         if (newBreak > 0) showBreak(newBreak) else hideCover()
+    }
+
+    private fun showUnlock(pkg: String, expiredMinutes: Int?) {
+        val existing = unlockOverlay
+        if (existing != null && unlockPackage == pkg && unlockExpiredMinutes == expiredMinutes) {
+            if (expiredMinutes == null) existing.updateAvailability(SocialUnlockStore.availableMinutes(this, pkg))
+            return
+        }
+        hideCover()
+        val app = SocialUnlockStore.app(this, pkg)
+        lateinit var overlay: SocialUnlockOverlay
+        overlay = SocialUnlockOverlay(this, app, unlockDraft, expiredMinutes,
+            onExit = { if (unlockOverlay === overlay) exitUnlock(pkg) },
+            onRetry = {
+                if (unlockOverlay === overlay) {
+                    visibleGrant = null
+                    unlockDraft = SocialUnlockDraft()
+                    refreshCover()
+                }
+            },
+            onConfirm = { minutes, reason ->
+                refreshCover()
+                if (unlockOverlay !== overlay || currentPackage != pkg) false else {
+                    val grant = SocialUnlockStore.grant(this, app, minutes, reason)
+                    if (grant == null) false else {
+                        visibleGrant = grant
+                        unlockFinishing = true
+                        unlockDraft = SocialUnlockDraft()
+                        true
+                    }
+                }
+            },
+            onFinished = {
+                if (unlockOverlay === overlay) {
+                    hideCover()
+                    refreshCover()
+                }
+            })
+        if (expiredMinutes == null) overlay.updateAvailability(SocialUnlockStore.availableMinutes(this, pkg))
+        val wm = getSystemService(WindowManager::class.java)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE
+        ).apply {
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+        }
+        try {
+            wm.addView(overlay.view, params)
+            windowManager = wm
+            cover = overlay.view
+            unlockOverlay = overlay
+            unlockPackage = pkg
+            unlockExpiredMinutes = expiredMinutes
+            overlay.enter()
+        } catch (_: Exception) { hideCover() }
+    }
+
+    private fun exitUnlock(pkg: String) {
+        unlockDraft = SocialUnlockDraft()
+        teamSession.clear()
+        val rules = restrictions()
+        val previous = previousPackage.takeIf { it.isNotBlank() && it != pkg }
+        if (previous != null && canReturnTo(previous, rules)) {
+            val intent = packageManager.getLaunchIntentForPackage(previous)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (intent != null && runCatching { startActivity(intent) }.isSuccess) return
+        }
+        runCatching { startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    private fun canReturnTo(pkg: String, rules: Restrictions): Boolean {
+        if (FocusPrefs.isEssential(this, pkg)) return true
+        if (blockedByTimer(pkg, rules) || SocialUsage.dailyLimitReached(this, pkg)) return false
+        val selected = SocialUnlockStore.selected(this, pkg)
+        if (selected && !rules.emergency && SocialUnlockStore.current(this, pkg) == null) return false
+        val chargesBalance = selected || (!rules.focusRulesActive && FocusPrefs.blocked(this, pkg))
+        if (!chargesBalance) return true
+        if ((selected || pkg in SocialUnlockStore.standardPackages) && SocialUsage.breakSecondsLeft(this) > 0) return false
+        return rules.emergency || Store.bal(this) > 0 || (ScreenTimeAlerts.automaticTeamTime(this) &&
+            CloudTeams.leased(this) > 0)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (unlockOverlay != null && !unlockFinishing) {
+            hideCover()
+            refreshCover()
+        }
     }
 
     private fun showBreak(seconds: Int) = showCover(
@@ -269,7 +446,7 @@ class FocusService : Service() {
         }
         val title = TextView(this).apply {
             text = when (reason) {
-                CoverReason.QUEST -> "🔒 Fókusz\nQuest folyamatban!"
+                CoverReason.QUEST -> "🔒 Fókusz\nZárolt alkalmazás"
                 CoverReason.BALANCE -> "🔒 Fókusz\nElfogyott a mai időkereted"
                 CoverReason.BREAK -> "Fókusz\nKötelező szünet"
                 CoverReason.APP_LIMIT -> "🔒 Fókusz\nElérted az app napi keretét"
@@ -281,7 +458,7 @@ class FocusService : Service() {
         }
         val desc = TextView(this).apply {
             text = when (reason) {
-                CoverReason.QUEST -> "A küldetés időzítője alatt a közösségi appok zárolva vannak. Térj vissza a feladatodhoz!"
+                CoverReason.QUEST -> countdown.orEmpty()
                 CoverReason.BALANCE -> "A Fókusz alkalmazásban további perceket szerezhetsz."
                 CoverReason.BREAK -> countdown.orEmpty()
                 CoverReason.APP_LIMIT -> "A többi kiválasztott apphoz továbbra is használhatod a maradék idődet."
@@ -331,12 +508,15 @@ class FocusService : Service() {
         cover = null
         coverDescription = null
         coverReason = null
+        unlockOverlay = null
+        unlockFinishing = false
         try { windowManager?.removeView(view) } catch (_: Exception) { }
     }
 
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacks(pulse)
+        handler.removeCallbacks(expiryPulse)
         background.cancel()
         hideCover()
         super.onDestroy()

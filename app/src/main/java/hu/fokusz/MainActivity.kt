@@ -792,6 +792,7 @@ class MainActivity : ComponentActivity() {
                 Text("A napi 30 perc minden figyelt alkalmazásra közös. A játékkal szerzett idő hozzáadódik.",
                     color = Muted, fontSize = 12.sp)
             }
+            SocialUnlockSettings()
             ScreenTimePanel()
             GlassCard {
                 Text("TIPP XIAOMI TELEFONHOZ", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)

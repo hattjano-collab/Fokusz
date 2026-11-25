@@ -161,7 +161,7 @@ object FocusPrefs {
     private val deadlineMigration = Any()
     @Volatile private var cachedBoot: Int? = null
 
-    private fun sampleTime(c: Context): FocusTime {
+    internal fun sampleTime(c: Context): FocusTime {
         val boot = cachedBoot ?: runCatching {
             Settings.Global.getInt(c.contentResolver, Settings.Global.BOOT_COUNT, -1)
         }.getOrDefault(-1).also { cachedBoot = it }
