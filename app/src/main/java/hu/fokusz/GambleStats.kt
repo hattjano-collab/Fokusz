@@ -23,8 +23,11 @@ object GambleStats {
     @Synchronized fun staked(c:Context):Int {today(c);return sp(c).getInt("staked",0)}
     @Synchronized fun canBet(c:Context,amount:Int):Boolean =
         amount > 0 && amount <= Store.bal(c)
-    @Synchronized fun reserve(c:Context,amount:Int):Boolean {
-        if(!canBet(c,amount))return false
+    @Synchronized fun reserve(c:Context,amount:Int, debitReason:String? = null):Boolean {
+        if (debitReason != null) {
+            if (!Store.spend(c, amount, debitReason)) return false
+        } else if (!canBet(c, amount)) return false
+        today(c)
         val s=sp(c)
         s.edit().putInt("staked",(s.getInt("staked",0).toLong()+amount)
             .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).commit()

@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -43,6 +46,8 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private val CP=Color(0xFF7BE7C1)
 private val CW=Color(0xFFF2F6FF)
@@ -64,6 +69,77 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
         body()
     }
 }
+
+@Composable private fun BankHistoryPanel(state: CloudTeamView) {
+    val context = LocalContext.current
+    var shown by remember(state.id) { mutableStateOf(false) }
+    var refresh by remember(state.id) { mutableIntStateOf(0) }
+    var items by remember(state.id) { mutableStateOf<List<CloudTeams.BankEvent>?>(null) }
+    var note by remember(state.id) { mutableStateOf("") }
+    var loading by remember(state.id) { mutableStateOf(false) }
+    LaunchedEffect(shown, refresh, state.id, state.lastBankEvent) {
+        if (!shown) return@LaunchedEffect
+        loading = true
+        try {
+            items = CloudTeams.bankHistory(context)
+            note = if (items == null) "A kivonathoz az új Firebase-szabályok szükségesek." else ""
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            note = "A kivonat most nem érhető el."
+        } finally {
+            loading = false
+        }
+    }
+
+    CloudBox("Csapatbanki kivonat") {
+        OutlinedButton(onClick = { shown = !shown }) {
+            Text(if (shown) "Kivonat bezárása" else "Kivonat megnyitása")
+        }
+        if (shown) {
+            Text("Az 50 legutóbbi naplózott művelet. A használatra lefoglalt idő már a foglaláskor látszik.",
+                color = CM, fontSize = 12.sp)
+            if (loading) Text("Kivonat betöltése…", color = CM)
+            if (note.isNotBlank()) Text(note, color = CG)
+            if (items?.isEmpty() == true) Text("Még nincs naplózott művelet.", color = CM)
+            val formatter = remember { DateTimeFormatter.ofPattern("yyyy.MM.dd. HH:mm") }
+            for (entry in items.orEmpty()) {
+                val name = state.members.firstOrNull { it.uid == entry.uid }?.name ?: "Korábbi tag"
+                Text("${entry.timestamp.toInstant().atZone(ZoneId.systemDefault()).format(formatter)} · $name",
+                    color = CM, fontSize = 11.sp)
+                for (line in bankLines(entry)) Text(line, color = CW, fontSize = 13.sp)
+            }
+            OutlinedButton(enabled = !loading, onClick = { refresh++ }) { Text("Frissítés") }
+        }
+    }
+}
+
+private fun bankLines(event: CloudTeams.BankEvent): List<String> {
+    fun amount(seconds: Long) = duration(seconds.coerceIn(0L, Store.MAX_SAFE_SECONDS.toLong()).toInt())
+    val poolChange = event.afterPool - event.beforePool
+    val bankChange = event.afterBank - event.beforeBank
+    val lines = when (event.kind) {
+        "quest" -> listOf("Questjutalom +${amount(poolChange)}")
+        "personal_pool" -> listOf("Saját befizetés a közös keretbe +${amount(poolChange)}")
+        "personal_bank" -> listOf("Saját befizetés a bankba +${amount(bankChange)}")
+        "transfer" -> listOf("Átvezetés a közös keretből a bankba +${amount(bankChange)}")
+        "boss" -> listOf("Közös főkihívás jutalma +${amount(poolChange)}")
+        "usage" -> buildList {
+            if (poolChange < 0) add("Használatra foglalva a keretből −${amount(-poolChange)}")
+            if (bankChange < 0) add("Használatra foglalva a bankból −${amount(-bankChange)}")
+        }
+        "daily" -> buildList {
+            add("Napi közös alapkeret +${amount(event.afterPool)}")
+            val carryover = minOf(event.beforePool, bankChange.coerceAtLeast(0))
+            if (carryover > 0) add("Tegnapi maradék átvezetése +${amount(carryover)}")
+            val interest = bankChange - carryover
+            if (interest > 0) add("Napi bankkamat +${amount(interest)}")
+        }
+        else -> emptyList()
+    }
+    return lines
+}
+
 @Composable fun CloudTeamPanel(){
     val ctx=LocalContext.current
     val scope=rememberCoroutineScope()
@@ -87,6 +163,8 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
         Text("👥 CSAPATOK",color=CW,fontSize=25.sp,fontWeight=FontWeight.Black)
         Text("QR-kódos csatlakozás távolról, mobilinternetről vagy bármely Wi-Fi-ről. Nem kell központi telefon.",
             color=CM,fontSize=12.sp)
+        TeamCommunityPanel(state)
+        TeamNotificationPanel()
         if(!active){
             CloudBox("✨ CSAPAT LÉTREHOZÁSA"){
                 OutlinedTextField(value=teamName,onValueChange={teamName=it.take(40)},
@@ -167,9 +245,13 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
                 Text(duration(state.pool),color=CP,fontSize=27.sp,fontWeight=FontWeight.Black)
                 Text("Naponta +10 perc/tag; minden teljesített saját quest után +5 perc a csapatnak.",
                     color=CM,fontSize=12.sp)
-                Text("Ha elfogy a személyes idő, automatikusan a közös keret fogy, majd a bank.",
+                Text(if (ScreenTimeAlerts.automaticTeamTime(ctx))
+                    "Ha elfogy a személyes idő, automatikusan a közös keret fogy, majd a bank."
+                    else "Ha elfogy a saját idő, a Fókusz legfeljebb 5 perc közös időt ajánl fel. Az automatikus mód a beállításokban kapcsolható be.",
                     color=CW,fontSize=12.sp)
                 Text("Bankkal együtt: "+duration((state.pool.toLong()+state.bank).coerceAtMost(Store.MAX_SAFE_SECONDS.toLong()).toInt()),color=CG)
+                Text("Tagként naponta legfeljebb a teljes napi csapatkeret felét használhatod.",
+                    fontSize=12.sp)
                 Text("Már lefoglalt közös időd: "+duration(CloudTeams.leased(ctx)),
                     color=CM,fontSize=12.sp)
             }
@@ -178,6 +260,11 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
                 Text("A tegnapról megmaradt idő a bankba kerül. A bank minden új napon 10%-kal nő. Nincs 24 órás vagy napi banki korlát.",
                     color=CM,fontSize=12.sp)
             }
+            BankHistoryPanel(state)
+            TeamSocialPanel(state)
+            TeamSocialRequestsPanel(state)
+            TeamRankPanel(state)
+            CloudBox("Csapatbeszélgetés") { TeamChatPanel(state) }
             CloudBox("🎁 EXTRA IDŐ A CSAPATNAK"){
                 Text("A saját virtuális képernyőidődből bármennyit felajánlhatsz a csapatnak, vagy közvetlenül a bankjába teheted.",
                     color=CM,fontSize=12.sp)
@@ -221,39 +308,8 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
                 Text("Csak virtuális időt mozgatunk. A személyes egyenleg a telefonon tárolódik, ezért a felajánlás az alkalmazás használói közötti bizalmon alapul.",
                     color=CM,fontSize=11.sp)
             }
-            CloudBox("👑 CSAPAT BOSS FIGHT"){
-                val n=state.members.size.coerceAtLeast(1)
-                Text("Minden tag eredménye összeadódik. Cél: 100 fekvő, 10 sakkparti és 3 óra tanulás tagonként.",
-                    color=CM,fontSize=12.sp)
-                listOf(Triple("Fekvőtámasz",state.push to state.targetPush,100*n),
-                    Triple("Sakkparti",state.chess to state.targetChess,10*n),
-                    Triple("Tanulás",state.study to state.targetStudy,10800*n))
-                    .forEach{item->
-                        val remainingGoal=item.third
-                        val done=(item.second.first-(item.second.second-remainingGoal)).coerceAtLeast(0)
-                        Row {
-                            Text(item.first,color=CW,modifier=Modifier.weight(1f))
-                            Text(if(item.first=="Tanulás")duration(done)+" / "+duration(remainingGoal)
-                                else "$done / $remainingGoal",color=CP,fontSize=12.sp)
-                        }
-                        LinearProgressIndicator(progress={
-                            (done.toFloat()/remainingGoal.coerceAtLeast(1)).coerceIn(0f,1f)
-                        },modifier=Modifier.fillMaxWidth().height(8.dp),color=CP,
-                            trackColor=Color(0xFF40526B))
-                    }
-                val ready=state.push>=state.targetPush&&state.chess>=state.targetChess&&
-                    state.study>=state.targetStudy
-                val cooldown=state.bossClaimed!=null &&
-                    System.currentTimeMillis()-state.bossClaimed.time<7L*86400000L
-                Button(onClick={busy=true;scope.launch{
-                    message=CloudTeams.claimBoss(ctx);busy=false;tick++
-                }},enabled=ready&&!cooldown&&!busy,
-                    modifier=Modifier.fillMaxWidth()){
-                    Text(if(cooldown)"ÚJ BOSS 7 NAP MÚLVA"
-                         else "BOSS JUTALOM: +"+duration(n*900))
-                }
-                Text("Nincsenek külön csapatquestek és fókuszszoba.",
-                    color=CM,fontSize=11.sp)
+            CloudBox("👑 CSAPAT BOSS FIGHT") {
+                WeeklyTeamBossPanel(state)
             }
             CloudBox("👤 CSAPATTAGOK · "+state.members.size){
                 for(member in state.members){
@@ -284,6 +340,7 @@ private fun teamQr(code:String):android.graphics.Bitmap?=try{
                     Text("Megosztom a saját képernyőidőmet",color=CW,fontSize=12.sp)
                 }
             }
+            TeamModerationPanel(state)
             CloudBox("⚙️ CSAPATKEZELÉS"){
                 Text("Csak csapattagok olvashatják az adatokat. A naptárad és az alkalmazáslistád nem látható.",
                     color=CM,fontSize=12.sp)

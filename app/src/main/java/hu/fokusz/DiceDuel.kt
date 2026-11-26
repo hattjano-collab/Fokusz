@@ -101,7 +101,7 @@ import java.security.SecureRandom
             modifier=Modifier.fillMaxWidth(),textAlign=TextAlign.Center)
         Button(onClick={
             if(rolling||!GambleStats.reserve(context,stake))return@Button
-            Store.add(context,-stake)
+            Store.add(context, -stake, "Kockapárbaj tétje")
             val x=random.nextInt(6)+1
             val y=random.nextInt(6)+1
             finalPlayer=x
@@ -111,8 +111,8 @@ import java.security.SecureRandom
                 x<y -> -stake
                 else -> 0
             }
-            if(x>y) Store.addUncapped(context,stake.toLong()*2L)
-            else if(x==y)Store.addUncapped(context,stake.toLong())
+            if (x > y) Store.addUncapped(context, stake.toLong() * 2L, "Kockapárbaj kifizetése")
+            else if (x == y) Store.addUncapped(context, stake.toLong(), "Kockapárbaj tétjének visszaadása")
             // A tényleges eredményt a dobás végén mutatjuk meg.
             result="::$net"
             GambleStats.record(context,"Kockapárbaj",net)
