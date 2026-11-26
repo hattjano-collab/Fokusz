@@ -163,6 +163,8 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
         Text("👥 CSAPATOK",color=CW,fontSize=25.sp,fontWeight=FontWeight.Black)
         Text("QR-kódos csatlakozás távolról, mobilinternetről vagy bármely Wi-Fi-ről. Nem kell központi telefon.",
             color=CM,fontSize=12.sp)
+        TeamCommunityPanel(state)
+        TeamNotificationPanel()
         if(!active){
             CloudBox("✨ CSAPAT LÉTREHOZÁSA"){
                 OutlinedTextField(value=teamName,onValueChange={teamName=it.take(40)},
@@ -259,6 +261,10 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
                     color=CM,fontSize=12.sp)
             }
             BankHistoryPanel(state)
+            TeamSocialPanel(state)
+            TeamSocialRequestsPanel(state)
+            TeamRankPanel(state)
+            CloudBox("Csapatbeszélgetés") { TeamChatPanel(state) }
             CloudBox("🎁 EXTRA IDŐ A CSAPATNAK"){
                 Text("A saját virtuális képernyőidődből bármennyit felajánlhatsz a csapatnak, vagy közvetlenül a bankjába teheted.",
                     color=CM,fontSize=12.sp)
@@ -334,6 +340,7 @@ private fun bankLines(event: CloudTeams.BankEvent): List<String> {
                     Text("Megosztom a saját képernyőidőmet",color=CW,fontSize=12.sp)
                 }
             }
+            TeamModerationPanel(state)
             CloudBox("⚙️ CSAPATKEZELÉS"){
                 Text("Csak csapattagok olvashatják az adatokat. A naptárad és az alkalmazáslistád nem látható.",
                     color=CM,fontSize=12.sp)

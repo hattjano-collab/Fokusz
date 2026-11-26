@@ -35,7 +35,15 @@ import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import kotlin.math.roundToInt
 
-internal data class SocialUnlockDraft(var minutes: String = "", var reason: SocialUnlockReason? = null)
+internal data class SocialUnlockDraft(
+    var minutes: String = "",
+    var reason: SocialUnlockReason? = null,
+    var emergency: Boolean = false,
+    var approved: Boolean = false,
+    var joke: String? = null,
+) {
+    fun wholeMinutes(): Int? = minutes.takeIf { text -> text.all { it in '0'..'9' } }?.toIntOrNull()
+}
 
 private const val UNLOCK_BG = 0xff0b1120.toInt()
 private const val UNLOCK_CARD = 0xff18233b.toInt()
@@ -99,7 +107,8 @@ internal class SocialUnlockOverlay(
     private val expiredMinutes: Int?,
     private val onExit: () -> Unit,
     private val onRetry: () -> Unit,
-    private val onConfirm: (Int, SocialUnlockReason) -> Boolean,
+    private val onConfirm: (Int, SocialUnlockReason, Boolean, Boolean) -> Boolean,
+    private val onAlternative: () -> Unit,
     private val onFinished: () -> Unit,
 ) {
     private val root = BlockingUnlockWindow(context) { if (!success) onExit() }
@@ -110,6 +119,10 @@ internal class SocialUnlockOverlay(
     }
     private var success = false
     private var available = 0
+    private var emergencyAvailable = 0
+    private var emergencyToggle: TextView? = null
+    private var approvedAvailable = 0
+    private var approvedToggle: TextView? = null
     private var hint: TextView? = null
     private var hold: UnlockHoldButton? = null
     private val reasonCards = mutableMapOf<SocialUnlockReason, Pair<TextView, TextView>>()
@@ -143,8 +156,12 @@ internal class SocialUnlockOverlay(
             }, LinearLayout.LayoutParams(root.dp(48), root.dp(48)))
         }
         val title = if (expiredMinutes == null) "${app.name} feloldása"
-            else "Lejárt a $expiredMinutes perc ${app.name}-időd"
+            else "Lejárt a $expiredMinutes perc ${app.name}-időd."
         scrollBody.addView(text(title, 24f, bold = true), vertical(10))
+        if (SocialUnlockStore.jokes(context)) {
+            val joke = draft.joke ?: SocialUnlockJokes.next(app.packageName, expiredMinutes).also { draft.joke = it }
+            scrollBody.addView(text(joke, 16f).apply { setTextColor(UNLOCK_MUTED) }, vertical(8))
+        }
         if (expiredMinutes != null) {
             content.addView(action("Kilépek", click = onExit), vertical(8))
             content.addView(action("Új időt kérek", primary = true, click = onRetry), vertical(8))
@@ -160,18 +177,37 @@ internal class SocialUnlockOverlay(
         content.animate().alpha(1f).translationY(0f).setDuration(220).start()
     }
 
-    fun updateAvailability(minutes: Int) {
+    fun updateAvailability(minutes: Int, emergencyMinutes: Int, approvedMinutes: Int = 0) {
         available = minutes
+        emergencyAvailable = emergencyMinutes
+        approvedAvailable = approvedMinutes
         refreshButton()
     }
 
     private fun refreshButton() {
         if (success) return
-        val amount = draft.minutes.toIntOrNull()
-        val valid = amount != null && amount in 1..available && draft.reason != null
-        hint?.text = if (amount != null && amount > available) "Most $available perc áll rendelkezésedre."
-            else "Elérhető: $available perc"
-        hold?.update(if (valid) "Tartsd nyomva · $amount perc feloldása" else "Tartsd nyomva a feloldáshoz", valid)
+        val amount = draft.wholeMinutes()
+        val limit = when {
+            draft.emergency -> emergencyAvailable
+            draft.approved -> approvedAvailable
+            else -> available
+        }
+        val valid = amount != null && amount in 1..limit && draft.reason != null
+        hint?.text = if (amount != null && amount > limit) "Most $limit percet tudsz felhasználni."
+            else when {
+                draft.emergency -> "Vészkeret: $limit perc"
+                draft.approved -> "Jóváhagyott pluszidő: $limit perc"
+                else -> "Elérhető: $limit perc"
+            }
+        emergencyToggle?.apply {
+            visibility = if (emergencyAvailable > 0 || draft.emergency) View.VISIBLE else View.GONE
+            text = if (draft.emergency) "Vissza a rendes időkerethez" else "Napi vészkeret · legfeljebb 3 perc"
+        }
+        approvedToggle?.apply {
+            visibility = if (approvedAvailable > 0 || draft.approved) View.VISIBLE else View.GONE
+            text = if (draft.approved) "Vissza a rendes időkerethez" else "Jóváhagyott pluszidő használata"
+        }
+        hold?.update(if (valid) "Tartsd nyomva · ${app.name} · $amount perc" else "Tartsd nyomva a feloldáshoz", valid)
     }
 
     private fun text(value: String, size: Float, bold: Boolean = false) = TextView(context).apply {
@@ -217,7 +253,7 @@ internal class SocialUnlockOverlay(
             setPadding(dp(13), dp(4), dp(13), dp(4))
             setSingleLine(true)
             background = rounded(UNLOCK_CARD, UNLOCK_OUTLINE)
-            inputType = InputType.TYPE_CLASS_NUMBER
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
             imeOptions = EditorInfo.IME_ACTION_DONE
             filters = arrayOf(InputFilter.LengthFilter(9))
             setOnEditorActionListener { _, actionId, _ ->
@@ -279,6 +315,19 @@ internal class SocialUnlockOverlay(
             body.addView(row, vertical(8))
         }
 
+        emergencyToggle = action("") {
+            draft.emergency = !draft.emergency
+            draft.approved = false
+            refreshButton()
+        }.apply { contentDescription = null }
+        body.addView(emergencyToggle, vertical(12))
+        approvedToggle = action("") {
+            draft.approved = !draft.approved
+            draft.emergency = false
+            refreshButton()
+        }.apply { contentDescription = null }
+        body.addView(approvedToggle, vertical(8))
+        body.addView(action("Inkább csinálok mást", click = onAlternative), vertical(8))
         hold = UnlockHoldButton(context, ::confirm)
         content.addView(hold, vertical(12))
         field.addTextChangedListener(object : TextWatcher {
@@ -317,8 +366,13 @@ internal class SocialUnlockOverlay(
     private fun confirm() {
         if (success) return
         val reason = draft.reason ?: return
-        val amount = draft.minutes.toIntOrNull()?.takeIf { it in 1..available } ?: return
-        if (!onConfirm(amount, reason)) return
+        val limit = when {
+            draft.emergency -> emergencyAvailable
+            draft.approved -> approvedAvailable
+            else -> available
+        }
+        val amount = draft.wholeMinutes()?.takeIf { it in 1..limit } ?: return
+        if (!onConfirm(amount, reason, draft.emergency, draft.approved)) return
         success = true
         hold?.update("✓ Feloldva", false)
         context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(root.windowToken, 0)

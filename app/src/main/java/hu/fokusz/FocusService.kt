@@ -42,11 +42,18 @@ object UsageGuard {
 }
 
 class FocusService : Service() {
-    private enum class CoverReason { QUEST, BALANCE, BREAK, APP_LIMIT, TEAM_OFFER, TEAM_WAIT }
+    private enum class CoverReason { QUEST, BALANCE, BREAK, APP_LIMIT, TEAM_OFFER, TEAM_WAIT, TEAM_PENDING, TEAM_AUDIO, RECHECK }
 
     companion object {
         @Volatile var isRunning = false
         private const val CHANNEL = "fokusz-monitor"
+        private var running: FocusService? = null
+
+        internal fun windowChanged(pkg: String, activity: String) {
+            running?.foregroundChanged(pkg, activity)
+        }
+
+        internal fun refreshUnlocks() { running?.refreshCover() }
     }
     private val handler = Handler(Looper.getMainLooper())
     private val balanceWarning = BalanceWarning()
@@ -55,28 +62,34 @@ class FocusService : Service() {
     private var currentPackage = ""
     private var resumedPackage = ""
     private var resumedClass: String? = null
+    private var lastWindowTime = 0L
     private var previousPackage = ""
     private var cover: View? = null
     private var coverReason: CoverReason? = null
     private var coverDescription: TextView? = null
+    private var coverPreludeId: String? = null
     private var unlockOverlay: SocialUnlockOverlay? = null
     private var unlockPackage = ""
     private var unlockExpiredMinutes: Int? = null
     private var unlockDraft = SocialUnlockDraft()
     private var unlockFinishing = false
+    private var unlockLeaving = false
     private var visibleGrant: SocialUnlockGrant? = null
+    private var heardPrelude = ""
+    private var playingPrelude = ""
+    private var voicePlayer: TeamVoicePlayer? = null
     private val expiryPulse = Runnable { refreshCover() }
     private var windowManager: WindowManager? = null
     private val background=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private var lastNotification=0L
     private var lastChessSync=0L
     private var lastDuolingoSync=0L
-    private var lastCalendarReminder=""
+    private var lastObservedDay: LocalDate? = null
 
     private val pulse = object : Runnable {
         override fun run() {
             val next = SystemClock.uptimeMillis() + 1000L
-            try { monitor() } catch (_: Exception) { hideCover() }
+            try { monitor() } catch (_: Exception) { coverAfterFailure() }
             handler.postAtTime(this, next)
         }
     }
@@ -87,6 +100,7 @@ class FocusService : Service() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Fókusz figyelés", NotificationManager.IMPORTANCE_LOW))
         startForeground(2,liveNotification())
         isRunning = true
+        running = this
         CloudTeams.start(this)
         QuestStore.resetClock(this)
         UserQuests.resetClock(this)
@@ -126,7 +140,15 @@ class FocusService : Service() {
     }
 
     private fun refreshCover() {
-        try { monitor(allowCharge = false) } catch (_: Exception) { hideCover() }
+        try { monitor(allowCharge = false) } catch (_: Exception) { coverAfterFailure() }
+    }
+
+    private fun coverAfterFailure() {
+        runCatching {
+            if (SocialUnlockStore.selected(this, currentPackage) && Settings.canDrawOverlays(this)) {
+                showCover(CoverReason.RECHECK)
+            } else hideCover()
+        }
     }
 
     private fun monitor(allowCharge: Boolean = true) {
@@ -137,9 +159,17 @@ class FocusService : Service() {
         if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
             teamSession.clear()
             visibleGrant = null
+            heardPrelude = ""
             unlockDraft = SocialUnlockDraft()
             hideCover()
             return
+        }
+        if (allowCharge && SocialUnlockStore.hasSelectedApps(this)) {
+            val day = LocalDate.now()
+            if (lastObservedDay != day) {
+                SocialUnlockStore.observeDay(this, day)
+                lastObservedDay = day
+            }
         }
         readForeground()
         val pkg = currentPackage
@@ -154,7 +184,7 @@ class FocusService : Service() {
             showCover(CoverReason.QUEST, timerDescription(restrictions))
             return
         }
-        if (SocialUsage.dailyLimitReached(this, pkg)) {
+        if (SocialUnlockStore.limitReached(this, pkg)) {
             teamSession.clear()
             showCover(CoverReason.APP_LIMIT)
             return
@@ -174,24 +204,31 @@ class FocusService : Service() {
             showBreak(breakLeft)
             return
         }
+        if (selected && SocialTeamRequests.waitingForTime(this, pkg)) {
+            teamSession.clear()
+            showCover(CoverReason.TEAM_PENDING)
+            return
+        }
         val time = if (selected) FocusPrefs.sampleTime(this) else null
         val grant = time?.let { SocialUnlockStore.current(this, pkg, it) }
         if (time != null && grant != null) {
             visibleGrant = grant
             handler.postDelayed(expiryPulse, grant.millisLeft(time))
         }
-        if (selected && !restrictions.emergency && grant == null) {
+        if (selected && grant == null) {
             val expiredMinutes = visibleGrant?.takeIf { it.packageName == pkg }?.minutes
             showUnlock(pkg, expiredMinutes)
             return
         }
         if (unlockFinishing) return
         if (unlockOverlay != null) hideCover()
-        if (allowCharge) chargeSecond(pkg, grant, restrictions.emergency, socialApp)
+        val emergency = if (selected) grant?.emergency == true else restrictions.emergency
+        if (allowCharge) chargeSecond(pkg, grant, emergency, socialApp)
     }
 
     private fun updateBackgroundWork() {
         QuestStore.tick(this)
+        TeamVoiceGate.watch(this)
         UserQuests.tick(this)
         CloudTeams.pulse(this)
         val elapsed=SystemClock.elapsedRealtime()
@@ -220,6 +257,7 @@ class FocusService : Service() {
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
         if (lastEventTime > now) lastEventTime = 0L
+        if (lastWindowTime > now) lastWindowTime = 0L
         val window = if (lastEventTime == 0L) 30 * 60_000L else 30_000L
         val windowStart = maxOf(lastEventTime, now - window)
         val events = us.queryEvents(windowStart, now) ?: return
@@ -227,20 +265,9 @@ class FocusService : Service() {
         val previouslySeen = lastEventTime
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
-            if (ev.timeStamp <= previouslySeen) continue
+            if (ev.timeStamp <= previouslySeen || ev.timeStamp < lastWindowTime) continue
             when (ev.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED -> {
-                    val pkg = ev.packageName.orEmpty()
-                    if (pkg != resumedPackage) {
-                        previousPackage = resumedPackage
-                        resumedPackage = pkg
-                        visibleGrant = null
-                        unlockDraft = SocialUnlockDraft()
-                        if (unlockOverlay != null) hideCover()
-                    }
-                    resumedClass = ev.className
-                    currentPackage = pkg
-                }
+                UsageEvents.Event.ACTIVITY_RESUMED -> setForeground(ev.packageName.orEmpty(), ev.className)
                 UsageEvents.Event.ACTIVITY_PAUSED -> {
                     if (currentPackage == ev.packageName && resumedClass == ev.className) currentPackage = ""
                 }
@@ -250,15 +277,37 @@ class FocusService : Service() {
         }
     }
 
+    private fun foregroundChanged(pkg: String, activity: String) {
+        if (pkg == currentPackage && activity == resumedClass) return
+        val wasSelected = SocialUnlockStore.selected(this, currentPackage)
+        lastWindowTime = System.currentTimeMillis()
+        setForeground(pkg, activity)
+        if (wasSelected || SocialUnlockStore.selected(this, pkg)) refreshCover()
+    }
+
+    private fun setForeground(pkg: String, activity: String?) {
+        if (pkg != resumedPackage) {
+            previousPackage = resumedPackage
+            resumedPackage = pkg
+            visibleGrant = null
+            heardPrelude = ""
+            unlockDraft = SocialUnlockDraft()
+            if (unlockOverlay != null) hideCover()
+        }
+        resumedClass = activity
+        currentPackage = pkg
+    }
+
     private data class Restrictions(
         val questLocked: Boolean,
         val legacyCustom: Boolean,
         val userQuest: Boolean,
         val focusLocked: Boolean,
+        val scheduleLeft: Int,
         val subjectApps: Set<String>?,
         val emergency: Boolean,
     ) {
-        val focusRulesActive: Boolean get() = focusLocked || legacyCustom || userQuest
+        val focusRulesActive: Boolean get() = focusLocked || legacyCustom || userQuest || scheduleLeft > 0
     }
 
     private fun restrictions(): Restrictions {
@@ -266,12 +315,14 @@ class FocusService : Service() {
         val legacyCustom = questLocked && QuestStore.isCustomTimerLocked(this)
         val userQuest = UserQuests.locked(this)
         val focusLocked = FocusPrefs.focusLocked(this)
+        val scheduleLeft = FocusSchedules.secondsLeft(this)
         val subjectApps = when {
             userQuest -> UserQuests.subjectApps(this)
             legacyCustom -> FocusPrefs.selectedSubject(this).packages
+            scheduleLeft > 0 && !focusLocked -> emptySet()
             else -> null
         }
-        return Restrictions(questLocked, legacyCustom, userQuest, focusLocked, subjectApps,
+        return Restrictions(questLocked, legacyCustom, userQuest, focusLocked, scheduleLeft, subjectApps,
             FocusPrefs.emergencyActive(this))
     }
 
@@ -279,7 +330,9 @@ class FocusService : Service() {
         val normalQuestBlock = rules.questLocked && !rules.legacyCustom && !rules.emergency &&
             (FocusPrefs.blocked(this, pkg) || pkg in Store.BLOCKED || pkg in Store.QUEST_SOCIAL ||
                 SocialUnlockStore.selected(this, pkg))
-        return normalQuestBlock || (rules.focusRulesActive && !FocusPrefs.allowedDuringFocus(this, pkg, rules.subjectApps))
+        val activeRule = rules.focusLocked || rules.legacyCustom || rules.userQuest ||
+            (rules.scheduleLeft > 0 && !FocusSchedules.allowsException(this, pkg))
+        return normalQuestBlock || (activeRule && !FocusPrefs.allowedDuringFocus(this, pkg, rules.subjectApps))
     }
 
     private fun timerDescription(rules: Restrictions): String {
@@ -287,6 +340,7 @@ class FocusService : Service() {
             if (rules.focusLocked) FocusPrefs.focusTimer(this@FocusService)?.let { timer ->
                 add("Fókusz: ${clock(timer.secondsLeft)}${if (timer.paused) " (szünet)" else ""}")
             }
+            if (rules.scheduleLeft > 0) add("Ismétlődő fókusz: ${clock(rules.scheduleLeft)}")
             if (rules.questLocked) add("Quest: ${clock(QuestStore.secondsLeft(this@FocusService))}")
             if (rules.userQuest) UserQuests.active(this@FocusService)?.let { add("Saját quest: ${clock(it.left)}") }
         }
@@ -295,11 +349,18 @@ class FocusService : Service() {
 
     private fun chargeSecond(pkg: String, unlock: SocialUnlockGrant?, emergency: Boolean, socialApp: Boolean) {
         val spendReason = ScreenTimeLedger.socialReason(pkg)
+        if (unlock?.approved == true) {
+            if (SocialUnlockStore.recordSecond(this, unlock)) {
+                ScreenTimeLedger.record(this, "$spendReason · jóváhagyott pluszidő", -1)
+                recordUsage(pkg, socialApp)
+            } else showCover(CoverReason.BALANCE)
+            return
+        }
         val threshold = ScreenTimeAlerts.warningSeconds(this)
         val today = LocalDate.now()
         val personalBefore = Store.bal(this)
         if (personalBefore > threshold) balanceWarning.shouldVibrate(today, personalBefore, threshold)
-        val spentPersonal = Store.spend(this, 1, spendReason)
+        val spentPersonal = unlock?.emergency != true && Store.spend(this, 1, spendReason)
         var spentTeam = false
         if (spentPersonal || emergency) {
             teamSession.clear()
@@ -314,6 +375,16 @@ class FocusService : Service() {
                 showCover(CoverReason.BALANCE)
                 return
             }
+            val voiceMode = TeamVoiceGate.mode(this)
+            val prelude = TeamVoiceGate.item(teamId)
+            if (voiceMode == 2 && !TeamVoiceGate.loaded(teamId)) {
+                showCover(CoverReason.TEAM_AUDIO, "A Fókusz ellenőrzi, van-e meghallgatandó hangüzenet.")
+                return
+            }
+            if (prelude != null && prelude.id != heardPrelude && voiceMode > 0) {
+                showCover(CoverReason.TEAM_AUDIO, prelude = prelude)
+                return
+            }
             if (!automatic && grant == 0) {
                 showCover(CoverReason.TEAM_OFFER)
                 return
@@ -326,17 +397,20 @@ class FocusService : Service() {
             if (!automatic) teamSession.spentSecond()
         }
         if (spentTeam) ScreenTimeLedger.record(this, "$spendReason · csapatkeret", -1)
-        ProgressStore.used(this, 1)
         if (unlock != null) SocialUnlockStore.recordSecond(this, unlock)
-        val newBreak = SocialUsage.recordSecond(this, pkg,
-            advanceBreak = socialApp && (spentPersonal || spentTeam))
+        recordUsage(pkg, socialApp && (spentPersonal || spentTeam || unlock?.emergency == true))
+    }
+
+    private fun recordUsage(pkg: String, advanceBreak: Boolean) {
+        ProgressStore.used(this, 1)
+        val newBreak = SocialUsage.recordSecond(this, pkg, advanceBreak = advanceBreak)
         if (newBreak > 0) showBreak(newBreak) else hideCover()
     }
 
     private fun showUnlock(pkg: String, expiredMinutes: Int?) {
         val existing = unlockOverlay
         if (existing != null && unlockPackage == pkg && unlockExpiredMinutes == expiredMinutes) {
-            if (expiredMinutes == null) existing.updateAvailability(SocialUnlockStore.availableMinutes(this, pkg))
+            if (expiredMinutes == null) updateUnlockAvailability(existing, pkg)
             return
         }
         hideCover()
@@ -351,15 +425,27 @@ class FocusService : Service() {
                     refreshCover()
                 }
             },
-            onConfirm = { minutes, reason ->
+            onConfirm = { minutes, reason, emergency, approved ->
                 refreshCover()
-                if (unlockOverlay !== overlay || currentPackage != pkg) false else {
-                    val grant = SocialUnlockStore.grant(this, app, minutes, reason)
+                if (unlockOverlay !== overlay || currentPackage != pkg || unlockLeaving) false else {
+                    val grant = SocialUnlockStore.grant(this, app, minutes, reason, emergency = emergency, approved = approved)
                     if (grant == null) false else {
+                        runCatching { SocialTeamEvents.onGrant(this, grant) }
                         visibleGrant = grant
                         unlockFinishing = true
                         unlockDraft = SocialUnlockDraft()
                         true
+                    }
+                }
+            },
+            onAlternative = {
+                if (unlockOverlay === overlay && !unlockLeaving) {
+                    unlockLeaving = true
+                    SocialUnlockStore.recordCancellation(this)
+                    unlockDraft = SocialUnlockDraft()
+                    runCatching {
+                        startActivity(Intent(this, MainActivity::class.java).putExtra("focus_tab", 1)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
                     }
                 }
             },
@@ -369,7 +455,7 @@ class FocusService : Service() {
                     refreshCover()
                 }
             })
-        if (expiredMinutes == null) overlay.updateAvailability(SocialUnlockStore.availableMinutes(this, pkg))
+        if (expiredMinutes == null) updateUnlockAvailability(overlay, pkg)
         val wm = getSystemService(WindowManager::class.java)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
@@ -390,7 +476,15 @@ class FocusService : Service() {
         } catch (_: Exception) { hideCover() }
     }
 
+    private fun updateUnlockAvailability(overlay: SocialUnlockOverlay, pkg: String) {
+        overlay.updateAvailability(SocialUnlockStore.availableMinutes(this, pkg),
+            SocialUnlockStore.emergencyMinutes(this, pkg), SocialUnlockStore.approvedMinutes(this, pkg))
+    }
+
     private fun exitUnlock(pkg: String) {
+        if (unlockLeaving) return
+        unlockLeaving = true
+        if (unlockExpiredMinutes == null) SocialUnlockStore.recordCancellation(this)
         unlockDraft = SocialUnlockDraft()
         teamSession.clear()
         val rules = restrictions()
@@ -405,13 +499,14 @@ class FocusService : Service() {
 
     private fun canReturnTo(pkg: String, rules: Restrictions): Boolean {
         if (FocusPrefs.isEssential(this, pkg)) return true
-        if (blockedByTimer(pkg, rules) || SocialUsage.dailyLimitReached(this, pkg)) return false
+        if (blockedByTimer(pkg, rules) || SocialUnlockStore.limitReached(this, pkg) ||
+            SocialTeamRequests.waitingForTime(this, pkg)) return false
         val selected = SocialUnlockStore.selected(this, pkg)
-        if (selected && !rules.emergency && SocialUnlockStore.current(this, pkg) == null) return false
+        val grant = if (selected) SocialUnlockStore.current(this, pkg) ?: return false else null
         val chargesBalance = selected || (!rules.focusRulesActive && FocusPrefs.blocked(this, pkg))
         if (!chargesBalance) return true
         if ((selected || pkg in SocialUnlockStore.standardPackages) && SocialUsage.breakSecondsLeft(this) > 0) return false
-        return rules.emergency || Store.bal(this) > 0 || (ScreenTimeAlerts.automaticTeamTime(this) &&
+        return grant?.emergency == true || grant?.approved == true || (!selected && rules.emergency) || Store.bal(this) > 0 || (ScreenTimeAlerts.automaticTeamTime(this) &&
             CloudTeams.leased(this) > 0)
     }
 
@@ -428,15 +523,16 @@ class FocusService : Service() {
         "10 perc közösségi média után tarts egy rövid szünetet.\nFolytathatod $seconds másodperc múlva."
     )
 
-    private fun showCover(reason: CoverReason, countdown: String? = null) {
+    private fun showCover(reason: CoverReason, countdown: String? = null, prelude: TeamChatItem? = null) {
         if (cover != null) {
-            if (coverReason == reason) {
+            if (coverReason == reason && coverPreludeId == prelude?.id) {
                 if (countdown != null) coverDescription?.text = countdown
                 return
             }
             hideCover()
         }
         coverReason = reason
+        coverPreludeId = prelude?.id
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -448,8 +544,11 @@ class FocusService : Service() {
             text = when (reason) {
                 CoverReason.QUEST -> "🔒 Fókusz\nZárolt alkalmazás"
                 CoverReason.BALANCE -> "🔒 Fókusz\nElfogyott a mai időkereted"
+                CoverReason.RECHECK -> "Fókusz\nA feloldás ellenőrzése"
                 CoverReason.BREAK -> "Fókusz\nKötelező szünet"
                 CoverReason.APP_LIMIT -> "🔒 Fókusz\nElérted az app napi keretét"
+                CoverReason.TEAM_AUDIO -> "Fókusz\nHangüzenet a közös idő előtt"
+                CoverReason.TEAM_PENDING -> "Fókusz\nA csapat döntésére vársz"
                 CoverReason.TEAM_OFFER, CoverReason.TEAM_WAIT -> "Fókusz\nElfogyott a saját időkereted"
             }
             textSize = 26f
@@ -460,9 +559,13 @@ class FocusService : Service() {
             text = when (reason) {
                 CoverReason.QUEST -> countdown.orEmpty()
                 CoverReason.BALANCE -> "A Fókusz alkalmazásban további perceket szerezhetsz."
+                CoverReason.RECHECK -> "A Fókusz rövidesen újra ellenőrzi az engedélyt."
                 CoverReason.BREAK -> countdown.orEmpty()
                 CoverReason.APP_LIMIT -> "A többi kiválasztott apphoz továbbra is használhatod a maradék idődet."
                 CoverReason.TEAM_OFFER -> "Felhasználsz 5 percet a közös keretből? Az idő csak használat közben fogy."
+                CoverReason.TEAM_AUDIO -> countdown ?: if (TeamVoiceGate.mode(this@FocusService) == 2)
+                    "A folytatáshoz hallgasd végig a csapat hangüzenetét." else "A csapat hagyott neked egy üzenetet."
+                CoverReason.TEAM_PENDING -> "A kért pluszidő jóváhagyásáig ez az app zárolva van."
                 CoverReason.TEAM_WAIT -> "A közös idő most nem érhető el. A Fókusz újra próbálkozik."
             }
             textSize = 17f
@@ -481,6 +584,40 @@ class FocusService : Service() {
         }
         panel.addView(title)
         panel.addView(desc)
+        if (reason == CoverReason.TEAM_AUDIO && prelude != null) {
+            panel.addView(Button(this).apply {
+                text = "Hangüzenet lejátszása"
+                setOnClickListener {
+                    if (playingPrelude == prelude.id) return@setOnClickListener
+                    val attachment = prelude.attachment()
+                    if (attachment == null) {
+                        desc.text = "A hangüzenet sérült."
+                        return@setOnClickListener
+                    }
+                    val player = TeamVoicePlayer(this@FocusService)
+                    voicePlayer = player
+                    playingPrelude = prelude.id
+                    if (player.play(attachment) { completed ->
+                        playingPrelude = ""
+                        if (completed && coverReason == CoverReason.TEAM_AUDIO) {
+                            heardPrelude = prelude.id
+                            desc.text = "A közös idő ellenőrzése…"
+                        } else desc.text = "A hangüzenetet most nem sikerült lejátszani."
+                    }) {
+                        desc.text = "Hangüzenet lejátszása folyamatban…"
+                    } else {
+                        playingPrelude = ""
+                        desc.text = "A hangüzenetet most nem sikerült lejátszani."
+                    }
+                }
+            })
+            if (TeamVoiceGate.mode(this) == 1) {
+                panel.addView(Button(this).apply {
+                    text = "Tovább a közös időhöz"
+                    setOnClickListener { heardPrelude = prelude.id; desc.text = "A közös idő ellenőrzése…" }
+                })
+            }
+        }
         if (reason == CoverReason.TEAM_OFFER) {
             panel.addView(Button(this).apply {
                 text = "Kérek 5 percet a csapattól"
@@ -508,13 +645,19 @@ class FocusService : Service() {
         cover = null
         coverDescription = null
         coverReason = null
+        coverPreludeId = null
+        voicePlayer?.stop()
+        voicePlayer = null
+        playingPrelude = ""
         unlockOverlay = null
         unlockFinishing = false
+        unlockLeaving = false
         try { windowManager?.removeView(view) } catch (_: Exception) { }
     }
 
     override fun onDestroy() {
         isRunning = false
+        if (running === this) running = null
         handler.removeCallbacks(pulse)
         handler.removeCallbacks(expiryPulse)
         background.cancel()

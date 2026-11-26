@@ -60,6 +60,32 @@ try {
   await assertSucceeds(getDoc(guestDoc));
   await assertFails(getDoc(outsiderDoc));
   console.log("PASS membership remains private");
+  const socialId = owner + "_d47a3b0a-865e-4ac8-a675-50ff0d45bc81";
+  const socialEvent = db => doc(db, "teams", groupId, "socialEvents", socialId);
+  const unlock = { uid: owner, kind: "unlock", pkg: "com.instagram.android", app: "Instagram",
+    minutes: 7, reason: "messages", createdAt: serverTimestamp() };
+  await assertFails(setDoc(socialEvent(guestDb), unlock));
+  await assertFails(setDoc(socialEvent(ownerDb), { ...unlock, content: "private message" }));
+  await assertFails(setDoc(socialEvent(ownerDb), { ...unlock, reason: "unknown" }));
+  await assertSucceeds(setDoc(socialEvent(ownerDb), unlock));
+  await assertSucceeds(getDoc(socialEvent(guestDb)));
+  await assertFails(getDoc(socialEvent(outsiderDb)));
+  await assertFails(updateDoc(socialEvent(ownerDb), { minutes: 9 }));
+  console.log("PASS social event metadata stays in the team and is immutable");
+  const requestId = owner + "_a57e8cff-f6b7-4c76-9f30-5c6003743882";
+  const timeRequest = db => doc(db, "teams", groupId, "socialRequests", requestId);
+  const extra = { uid: owner, device: "4a2e0201-2583-4319-b48b-f589d0e20df0",
+    kind: "extra", pkg: "com.instagram.android", app: "Instagram", old: 0, minutes: 7,
+    reason: "Megnézem az üzeneteimet", state: "pending", createdAt: serverTimestamp() };
+  await assertFails(setDoc(timeRequest(ownerDb), { ...extra, state: "approved" }));
+  await assertFails(setDoc(timeRequest(ownerDb), { ...extra, kind: "empty", minutes: 15 }));
+  await assertSucceeds(setDoc(timeRequest(ownerDb), extra));
+  await assertFails(getDoc(timeRequest(outsiderDb)));
+  await assertFails(updateDoc(timeRequest(ownerDb), { state: "approved", decidedBy: owner, decidedAt: serverTimestamp() }));
+  await assertFails(updateDoc(timeRequest(guestDb), { minutes: 60, state: "approved", decidedBy: guest, decidedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(timeRequest(guestDb), { state: "approved", decidedBy: guest, decidedAt: serverTimestamp() }));
+  await assertFails(updateDoc(timeRequest(guestDb), { state: "rejected", decidedBy: guest, decidedAt: serverTimestamp() }));
+  console.log("PASS team approvals require another member and preserve request details");
   await assertFails(updateDoc(groupDoc,{pool:1170}));
   await assertSucceeds(reserve(ownerDb,owner,owner+"_usage-000000000000",1200,0,30,30));
   await assertFails(updateDoc(guestDoc,{pool:4000}));
@@ -195,5 +221,62 @@ try {
   await assertFails(deleteDoc(doc(guestDb,"teams",groupId,"bossTasks",owner+"_chess")));
   await assertSucceeds(deleteDoc(ownerTask));
   console.log("PASS members choose and share their own boss commitments without changing team totals");
+  const chatId = owner + "_aa3cd9e1-eaf1-480d-a021-1d91a8ee422c";
+  const chat = db => doc(db, "teams", groupId, "chat", chatId);
+  const chatText = {uid:owner, text:"Szia!", mime:"", data:"", prelude:false, createdAt:serverTimestamp()};
+  await assertFails(setDoc(chat(ownerDb), {...chatText, prelude:true}));
+  await assertFails(setDoc(chat(guestDb), chatText));
+  await assertSucceeds(setDoc(chat(ownerDb), chatText));
+  await assertSucceeds(getDoc(chat(guestDb)));
+  await assertFails(getDoc(chat(outsiderDb)));
+  await assertFails(updateDoc(chat(ownerDb), {text:"Átírt üzenet"}));
+  const comment=doc(ownerDb,"teams",groupId,"socialRequests",requestId,"comments",chatId);
+  await assertSucceeds(setDoc(comment,chatText));
+  const unknownComment=doc(ownerDb,"teams",groupId,"socialRequests","missing","comments",chatId);
+  await assertFails(setDoc(unknownComment,chatText));
+  console.log("PASS private chat and comments enforce authors, valid attachment type, and existing requests");
+
+  const weekly=db => doc(db,"teams",groupId,"weeklyUsage",owner);
+  const usageRow={week:currentWeek,uid:owner,usage:120,shared:20,updatedAt:serverTimestamp()};
+  await assertSucceeds(setDoc(weekly(ownerDb),usageRow));
+  await assertSucceeds(getDoc(weekly(guestDb)));
+  await assertFails(setDoc(weekly(guestDb),usageRow));
+  await assertFails(getDoc(weekly(outsiderDb)));
+  await assertSucceeds(deleteDoc(weekly(ownerDb)));
+  console.log("PASS weekly aggregate is opt-in per identity and unreadable by outsiders");
+
+  const friendId=owner+"_"+guest;
+  const friend=db => doc(db,"friendRequests",friendId);
+  await assertSucceeds(setDoc(doc(guestDb,"friendProfiles",guest),{name:"Barát"}));
+  await assertSucceeds(setDoc(doc(ownerDb,"friendProfiles",owner),{name:"Gazda"}));
+  await assertSucceeds(getDoc(friend(ownerDb)));
+  await assertSucceeds(setDoc(friend(ownerDb),{from:owner,to:guest,state:"pending",createdAt:serverTimestamp()}));
+  await assertSucceeds(getDoc(friend(guestDb)));
+  await assertFails(getDoc(friend(outsiderDb)));
+  await assertFails(updateDoc(friend(ownerDb),{state:"accepted"}));
+  await assertSucceeds(updateDoc(friend(guestDb),{state:"accepted"}));
+  await assertSucceeds(deleteDoc(friend(ownerDb)));
+  console.log("PASS requests are private and only the recipient can accept");
+
+  const publicRow=db => doc(db,"publicTeams",groupId);
+  const listing={name:"Fókusz barátok",owner,updatedAt:serverTimestamp()};
+  const outside="outsideruid003";
+  const publicJoin={
+    ["members."+outside]:profile("Új tag"), pool:increment(0), joinProof:"public:"+outside,
+    bossTargetPush:increment(100), bossTargetChess:increment(10), bossTargetStudy:increment(10800)
+  };
+  await assertFails(updateDoc(outsiderDoc,publicJoin));
+  await assertFails(setDoc(publicRow(guestDb),listing));
+  await assertSucceeds(setDoc(publicRow(ownerDb),listing));
+  await assertSucceeds(getDoc(publicRow(outsiderDb)));
+  await assertFails(getDoc(outsiderDoc));
+  const report=doc(outsiderDb,"communityReports",outside+"_c04f36bc-723e-4737-bdfd-b966c18541eb");
+  await assertSucceeds(setDoc(report,{reporter:outside,team:groupId,target:groupId,kind:"team",reason:"Sértő csapatnév",createdAt:serverTimestamp()}));
+  await assertSucceeds(getDoc(doc(ownerDb,"communityReports",report.id)));
+  await assertFails(getDoc(doc(guestDb,"communityReports",report.id)));
+  await assertFails(updateDoc(outsiderDoc,{...publicJoin,pool:increment(600)}));
+  await assertSucceeds(updateDoc(outsiderDoc,publicJoin));
+  await assertSucceeds(deleteDoc(publicRow(ownerDb)));
+  console.log("PASS public membership only works after owner opts in; reports stay with reporter and owner");
   console.log("FIRESTORE_RULES_VALIDATED");
 }finally {await environment.cleanup();}

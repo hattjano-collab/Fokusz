@@ -373,12 +373,13 @@ private val C = Color(0xFF273750)
             }
         }
         FeatureCard("🚨 VÉSZFELOLDÁS") {
-            Text("Naponta egy alkalommal 3 perc ideiglenes feloldás. Nem használható a szigorú egyéni quest közben.",
+            Text("Naponta egyszer legfeljebb 3 perc. Kijelölt közösségi appnál a feloldóképernyőn válaszd a „Napi vészkeret” lehetőséget.",
                 color = M)
+            Text("Szigorú fókuszidő vagy egyéni quest közben a tiltás érvényben marad.", color = M)
             if (FocusPrefs.emergencyActive(ctx)) {
                 Text("Aktív: még " + clock(FocusPrefs.emergencyLeft(ctx)),color = A)
             } else if (FocusPrefs.emergencyAvailable(ctx)) {
-                FeatureButton("3 PERCES VÉSZFELOLDÁS") {
+                FeatureButton(if (SocialUnlockStore.hasSelectedApps(ctx)) "VÉSZFELOLDÁS A TÖBBI APPHOZ" else "3 PERCES VÉSZFELOLDÁS") {
                     FocusPrefs.activateEmergency(ctx);refresh++
                 }
             } else Text("A mai vészfeloldást már elhasználtad.", color = M)

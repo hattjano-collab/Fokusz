@@ -347,8 +347,8 @@ object CloudTeams {
         withContext(Dispatchers.IO) {
             try {
                 if(active(c))return@withContext "Már tagja vagy egy csapatnak."
-                if(label.trim().length !in 3..40 || user.trim().length !in 2..24)
-                    return@withContext "A csapatnév és a becenév túl rövid."
+                if(!TeamCommunity.validName(label, 3..40) || !TeamCommunity.validName(user, 2..24))
+                    return@withContext "Adj meg megfelelő csapatnevet és becenevet."
                 val uid=ensureAuth()
                 setNickname(c,user);setSharing(c,share)
                 val id=db().collection("teams").document().id
@@ -383,7 +383,7 @@ object CloudTeams {
         withContext(Dispatchers.IO) {
             try {
                 if(active(c))return@withContext "Már egy csapat tagja vagy."
-                if(user.trim().length !in 2..24)return@withContext "Adj meg legalább 2 karakteres becenevet."
+                if(!TeamCommunity.validName(user, 2..24))return@withContext "Adj meg megfelelő becenevet."
                 if(!qr.startsWith("fokusz-firebase:v1:") || qr.length>1200)
                     return@withContext "Nem megfelelő Fókusz Firebase QR-kód."
                 val payload=String(Base64.decode(
@@ -395,7 +395,7 @@ object CloudTeams {
                 val key=args.getString("key")
                 val name=args.getString("name")
                 if(!id.matches(Regex("[A-Za-z0-9]{12,40}")) ||
-                    key.length !in 35..100 || name.length !in 3..40)
+                    (key != "public" && key.length !in 35..100) || name.length !in 3..40)
                     return@withContext "Hibás meghívókód."
                 val uid=ensureAuth()
                 setNickname(c,user);setSharing(c,share)
@@ -405,11 +405,11 @@ object CloudTeams {
                     "used" to if(share)(ProgressStore.recent(c,1).lastOrNull()?.usage ?: 0) else -1,
                     "push" to 0,"chess" to 0,"study" to 0,
                     "updatedAt" to FieldValue.serverTimestamp())
-                // Első alkalommal csak a QR kulcs ismeretében lehet írni.
-                // A csapat adatlapja a tagság előtt nem olvasható.
+                // A privát csapatba QR-kulccsal lehet belépni. A nyilvános listát
+                // a Firestore ellenőrzi. A csapat adatlapját csak a tagok olvashatják.
                 db().collection("teams").document(id).update(mapOf(
                     "members.$uid" to profile,
-                    "pool" to FieldValue.increment(600),
+                    "pool" to FieldValue.increment(if (key == "public") 0L else 600L),
                     "joinProof" to "$key:$uid",
                     "bossTargetPush" to FieldValue.increment(100),
                     "bossTargetChess" to FieldValue.increment(10),
@@ -479,7 +479,10 @@ object CloudTeams {
     }
 
     fun pulse(c:Context,force:Boolean=false) {
-        if(!active(c))return
+        if(!active(c)) {
+            TeamNotifications.watch(c)
+            return
+        }
         val now=System.currentTimeMillis()
         if(!force && now-lastPulse<5000L)return
         lastPulse=now
@@ -493,6 +496,11 @@ object CloudTeams {
             io.launch {
                 syncProfile(c.applicationContext)
                 syncBossProgress(c.applicationContext)
+                runCatching {
+                    val team = teamId(c)
+                    val uid = currentUid()
+                    if (team.isNotBlank() && uid.isNotBlank()) TeamWeeklyUsage.sync(c.applicationContext, team, uid)
+                }
             }
         }
         if(force || now-lastReward>45000L) {
@@ -500,6 +508,9 @@ object CloudTeams {
             io.launch{flushRewards(c.applicationContext)}
         }
         if(pendingContribution(c))io.launch{flushContribution(c.applicationContext)}
+        SocialTeamEvents.pulse(c)
+        SocialTeamRequests.pulse(c)
+        TeamNotifications.watch(c)
         // Közös időt csak ténylegesen korlátozott app használatakor kérünk.
     }
     private suspend fun settle(c:Context) {
@@ -654,6 +665,13 @@ object CloudTeams {
             }finally{leasing.set(false)}
         }
     }
+    private fun sharedUseKey(team: String, day: LocalDate) = "spent_${team}_$day"
+
+    internal fun weeklySharedUsage(c: Context, team: String, monday: LocalDate): Long {
+        val p = prefs(c)
+        return (0L..6L).sumOf { p.getInt(sharedUseKey(team, monday.plusDays(it)), 0).toLong() }
+    }
+
     @Synchronized fun spendSecond(c: Context, sessionRemaining: Int? = null): Boolean {
         if (!active(c) || sessionRemaining == 0) return false
         val p=prefs(c)
@@ -663,7 +681,9 @@ object CloudTeams {
             requestLease(c, unreserved)
             return false
         }
-        p.edit().putInt("lease",n-1).commit()
+        val usageKey = sharedUseKey(teamId(c), LocalDate.now(ZoneOffset.UTC))
+        val used = p.getInt(usageKey, 0)
+        if (!p.edit().putInt("lease",n-1).putInt(usageKey, used + 1).commit()) return false
         if(n<=20) requestLease(c, unreserved)
         return true
     }
@@ -824,6 +844,7 @@ object CloudTeams {
             if(!active(c))return@withContext "Nincs csapat."
             if(owner(c)) {
                 ensureAuth()
+                runCatching { TeamCommunity.setListed(c, false) }
                 teamRef(c).delete().await()
                 clear(c)
                 "✓ Csapat megszüntetve."

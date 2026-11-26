@@ -141,14 +141,17 @@ data class Hand(
 
 class MainActivity : ComponentActivity() {
     private var requestedTab by mutableIntStateOf(-1)
+    private var tabRequestRevision by mutableIntStateOf(0)
     private var quizShare by mutableStateOf<QuizShare?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         QuizShare.from(intent)?.let { quizShare = it }
-        if(intent.hasExtra("focus_tab"))
-            requestedTab=intent.getIntExtra("focus_tab",8)
+        if (intent.hasExtra("focus_tab")) {
+            requestedTab = intent.getIntExtra("focus_tab", 8)
+            tabRequestRevision++
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +170,7 @@ class MainActivity : ComponentActivity() {
                 onSurface = White
             )) {
                 Surface(color = Midnight, modifier = Modifier.fillMaxSize()) {
-                    FokuszApp(requestedTab, quizShare) { received ->
+                    FokuszApp(requestedTab, tabRequestRevision, quizShare) { received ->
                         if (quizShare?.id == received) quizShare = null
                     }
                 }
@@ -282,18 +285,19 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable internal fun FokuszApp(openTab: Int = -1, quizShare: QuizShare? = null,
+@Composable internal fun FokuszApp(openTab: Int = -1, openTabRevision: Int = 0, quizShare: QuizShare? = null,
                                  onShareConsumed: (String) -> Unit = {}) {
     val ctx = LocalContext.current
     val version = remember(ctx) { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }
     var tab by rememberSaveable { mutableStateOf(0) }
-    LaunchedEffect(openTab) { if(openTab in 0..12) tab=openTab }
+    LaunchedEffect(openTab, openTabRevision) { if (openTab in 0..12) tab = openTab }
     LaunchedEffect(quizShare?.id) { if (quizShare != null) tab = 11 }
     LaunchedEffect(Unit) { updateFokuszTheme(FocusPrefs.theme(ctx)) }
     var bal by remember { mutableStateOf(Store.bal(ctx)) }
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
     var usageOk by remember { mutableStateOf(UsageGuard.allowed(ctx)) }
     var overlayOk by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
+    var windowProtection by remember { mutableStateOf(SocialForegroundService.connected) }
 
     var minutes by rememberSaveable { mutableStateOf("1") }
     var seconds by rememberSaveable { mutableStateOf("00") }
@@ -325,6 +329,7 @@ class MainActivity : ComponentActivity() {
         while (true) {
             bal = Store.bal(ctx)
             isRunning = FocusService.isRunning
+            windowProtection = SocialForegroundService.connected
             usageOk = UsageGuard.allowed(ctx)
             overlayOk = Settings.canDrawOverlays(ctx)
             delay(1000)
@@ -575,6 +580,14 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        if (tab == 0 && (!isRunning || !usageOk || !overlayOk || !windowProtection)) {
+            GlassCard {
+                Text(if (!isRunning || !usageOk || !overlayOk) "A közösségi appok zárolása jelenleg inaktív"
+                    else "A gyors közösségiapp-zárolás jelenleg inaktív", color = Gold)
+                SoftAction("Bekapcsolás", onClick = { tab = 2 })
+            }
+        }
+
         if (tab == 0) {
             TimeHero(bal, compact = true)
             SectionLabel("Játssz az időddel", "Nincs valódi pénz — minden tét időegység.")
@@ -792,7 +805,16 @@ class MainActivity : ComponentActivity() {
                 Text("A napi 30 perc minden figyelt alkalmazásra közös. A játékkal szerzett idő hozzáadódik.",
                     color = Muted, fontSize = 12.sp)
             }
+            if (!windowProtection) {
+                GlassCard {
+                    Text("A gyors zároláshoz kapcsold be a Fókusz hozzáférhetőségi szolgáltatását. A szolgáltatás csak az aktív alkalmazást azonosítja.")
+                    SoftAction("Ablakfigyelés bekapcsolása", onClick = {
+                        ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    })
+                }
+            }
             SocialUnlockSettings()
+            FocusSchedulesPanel()
             ScreenTimePanel()
             GlassCard {
                 Text("TIPP XIAOMI TELEFONHOZ", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)

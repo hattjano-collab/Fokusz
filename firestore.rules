@@ -58,7 +58,12 @@ service cloud.firestore {
         && p.study is int && p.study >= 0
         && p.updatedAt == request.time;
     }
-    function validJoin() {
+    function publicPath(id) { return /databases/$(database)/documents/publicTeams/$(id); }
+    function publicJoin(teamId, uid) {
+      return request.resource.data.joinProof == 'public:' + uid
+        && exists(publicPath(teamId)) && get(publicPath(teamId)).data.owner == resource.data.ownerUid;
+    }
+    function validJoin(teamId) {
       let uid = request.auth.uid;
       return signedIn()
         && !(uid in resource.data.members)
@@ -71,9 +76,9 @@ service cloud.firestore {
         && request.resource.data.members.keys().size() ==
              resource.data.members.keys().size() + 1
         && validProfile(request.resource.data.members[uid])
-        && request.resource.data.joinProof == resource.data.inviteKey + ':' + uid
-        && request.resource.data.joinProof != resource.data.joinProof
-        && request.resource.data.pool == resource.data.pool + 600
+        && (request.resource.data.joinProof == resource.data.inviteKey + ':' + uid || publicJoin(teamId, uid))
+        && (publicJoin(teamId, uid) || request.resource.data.joinProof != resource.data.joinProof)
+        && request.resource.data.pool == resource.data.pool + (publicJoin(teamId, uid) ? 0 : 600)
         && request.resource.data.pool <= 2000000000
         && request.resource.data.bossTargetPush == resource.data.bossTargetPush + 100
         && request.resource.data.bossTargetChess == resource.data.bossTargetChess + 10
@@ -236,6 +241,57 @@ service cloud.firestore {
           ? (validQuestReward(team) || validPersonalContribution(team))
           : (request.resource.data.bank > resource.data.bank ? validBankTransfer(team) : validSpend(team));
     }
+    match /publicTeams/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && get(teamPath(id)).data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['owner','name','updatedAt'])
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.name == get(teamPath(id)).data.name
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && ((resource != null && resource.data.owner == request.auth.uid)
+        || get(teamPath(id)).data.ownerUid == request.auth.uid);
+    }
+    match /friendProfiles/{uid} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 24;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+    match /friendRequests/{id} {
+      function party() {
+        return signedIn() && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+      }
+      allow get: if party() || (signedIn() && resource == null && id.matches(request.auth.uid + '_[A-Za-z0-9]+'));
+      allow list: if party();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['from','to','state','createdAt'])
+        && request.resource.data.from == request.auth.uid && request.resource.data.to is string
+        && request.resource.data.to != request.auth.uid
+        && id == request.auth.uid + '_' + request.resource.data.to
+        && request.resource.data.state == 'pending' && request.resource.data.createdAt == request.time
+        && exists(/databases/$(database)/documents/friendProfiles/$(request.resource.data.to));
+      allow update: if party() && resource.data.to == request.auth.uid && resource.data.state == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state'])
+        && request.resource.data.state == 'accepted';
+      allow delete: if party();
+    }
+    match /communityReports/{id} {
+      allow get, list: if signedIn()
+        && (resource.data.reporter == request.auth.uid || get(teamPath(resource.data.team)).data.ownerUid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.reporter == request.auth.uid
+        && id.matches(request.auth.uid + '_[A-Za-z0-9-]{36}')
+        && request.resource.data.keys().hasOnly(['reporter','team','target','kind','reason','createdAt'])
+        && request.resource.data.reason is string && request.resource.data.reason.size() >= 5
+        && request.resource.data.reason.size() <= 180 && request.resource.data.createdAt == request.time
+        && ((request.resource.data.kind == 'team' && request.resource.data.target == request.resource.data.team
+             && exists(publicPath(request.resource.data.team)))
+          || (request.resource.data.kind == 'person' && request.auth.uid in get(teamPath(request.resource.data.team)).data.members
+              && request.resource.data.target in get(teamPath(request.resource.data.team)).data.members));
+      allow update, delete: if false;
+    }
     match /teams/{teamId} {
       allow create: if signedIn()
         && request.resource.data.keys().hasAll(mainKeys())
@@ -265,7 +321,7 @@ service cloud.firestore {
              timestamp.date(1970,1,1);
       allow get: if isMember();
       allow list: if false;
-      allow update: if signedIn() && (isMember() ? validMemberUpdate(teamId) : validJoin());
+      allow update: if signedIn() && (isMember() ? validMemberUpdate(teamId) : validJoin(teamId));
       allow delete: if isMember() &&
         resource.data.ownerUid == request.auth.uid;
 
@@ -285,6 +341,104 @@ service cloud.firestore {
           && request.auth.uid in get(teamPath(teamId)).data.members
           && getAfter(teamPath(teamId)).data.lastRewardEvent == eventId;
         allow update, delete: if false;
+      }
+
+      function isChatMember() {
+        return signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+      }
+      function validChatMessage(messageId, allowPrelude) {
+        let message = request.resource.data;
+        let fields = ['uid','text','mime','data','prelude','createdAt'];
+        return message.keys().hasAll(fields) && message.keys().hasOnly(fields)
+          && messageId.matches(request.auth.uid + '_[A-Za-z0-9-]{36}')
+          && message.uid == request.auth.uid && message.createdAt == request.time
+          && message.text is string && message.text.size() <= 500
+          && message.mime is string && message.data is string && message.prelude is bool
+          && ((!message.prelude) || (allowPrelude && message.mime == 'audio/mp4'))
+          && ((message.mime == '' && message.data == '' && message.text.size() >= 1)
+              || (message.mime in ['image/jpeg','image/gif','audio/mp4']
+                  && message.data.size() >= 4 && message.data.size() <= 200000));
+      }
+      match /weeklyUsage/{uid} {
+        allow read: if isChatMember();
+        allow create, update: if isChatMember() && request.auth.uid == uid && validWeeklyUsage();
+        allow delete: if isChatMember() && request.auth.uid == uid;
+        function validWeeklyUsage() {
+          let data = request.resource.data;
+          let fields = ['week','uid','usage','shared','updatedAt'];
+          return data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+            && data.uid == uid && activeBossWeek(data.week) && data.updatedAt == request.time
+            && data.usage is int && data.usage >= 0 && data.usage <= 604800
+            && data.shared is int && data.shared >= 0 && data.shared <= 604800;
+        }
+      }
+      match /chat/{messageId} {
+        allow get, list: if isChatMember();
+        allow create: if isChatMember() && validChatMessage(messageId, true);
+        allow update, delete: if false;
+      }
+
+      match /socialRequests/{requestId} {
+        function requestMember() {
+          return signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+        }
+        function validRequest() {
+          let d = request.resource.data;
+          let fields = ['uid','device','kind','pkg','app','old','minutes','reason','state','createdAt'];
+          return d.keys().hasAll(fields) && d.keys().hasOnly(fields)
+            && requestId.matches(request.auth.uid + '_[A-Za-z0-9-]{36}')
+            && d.uid == request.auth.uid && d.state == 'pending' && d.createdAt == request.time
+            && d.device is string && d.device.matches('[A-Za-z0-9-]{36}')
+            && d.pkg is string && d.pkg.size() <= 200 && d.pkg.matches('[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+')
+            && d.app is string && d.app.size() >= 1 && d.app.size() <= 80
+            && d.old is int && d.minutes is int && d.reason is string && d.reason.size() <= 160
+            && ((d.kind == 'extra' && d.old == 0 && d.minutes >= 1 && d.minutes <= 60 && d.reason.size() >= 3)
+                || (d.kind == 'empty' && d.old == 0 && d.minutes == 15 && d.reason.size() >= 3
+                    && get(teamPath(teamId)).data.pool == 0 && get(teamPath(teamId)).data.bank == 0)
+                || (d.kind == 'limit' && d.old >= 1 && d.old <= 1440
+                    && (d.minutes == 0 || (d.minutes > d.old && d.minutes <= 1440)))
+                || (d.kind == 'schedule' && d.old > 0 && d.minutes >= 1 && d.minutes <= 120 && d.reason.size() >= 3)
+                || (d.kind == 'remove' && d.old == 0 && d.minutes == 0));
+        }
+        allow get, list: if requestMember();
+        allow create: if requestMember() && validRequest();
+        allow update: if requestMember() && resource.data.uid != request.auth.uid
+          && resource.data.uid in get(teamPath(teamId)).data.members
+          && resource.data.state == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state','decidedBy','decidedAt'])
+          && request.resource.data.state in ['approved','rejected']
+          && request.resource.data.decidedBy == request.auth.uid && request.resource.data.decidedAt == request.time;
+        allow delete: if false;
+        match /comments/{messageId} {
+          allow get, list: if isChatMember();
+          allow create: if isChatMember() && validChatMessage(messageId, false)
+            && exists(/databases/$(database)/documents/teams/$(teamId)/socialRequests/$(requestId));
+          allow update, delete: if false;
+        }
+
+      }
+
+      match /socialEvents/{eventId} {
+        allow get, list: if signedIn() && request.auth.uid in get(teamPath(teamId)).data.members;
+        allow create: if signedIn() && request.auth.uid in get(teamPath(teamId)).data.members
+          && eventId.matches(request.auth.uid + '_[A-Za-z0-9-]{36}')
+          && validSocialEvent();
+        allow update, delete: if false;
+
+        function validSocialEvent() {
+          let data = request.resource.data;
+          let fields = ['uid','kind','pkg','app','minutes','reason','createdAt'];
+          return data.keys().hasAll(fields) && data.keys().hasOnly(fields)
+            && data.uid == request.auth.uid && data.createdAt == request.time
+            && data.pkg is string && data.app is string && data.minutes is int && data.reason is string
+            && ((data.kind == 'unlock'
+                 && data.pkg.matches('[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+') && data.pkg.size() <= 200
+                 && data.app.size() >= 1 && data.app.size() <= 80
+                 && data.minutes >= 1 && data.minutes <= 33333333
+                 && data.reason in ['school','messages','contact','lookup','share','break'])
+                || (data.kind == 'rest' && data.pkg == '' && data.app == ''
+                    && data.minutes == 1440 && data.reason == ''));
+        }
       }
 
       match /bankEvents/{eventId} {

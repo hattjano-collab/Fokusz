@@ -52,10 +52,14 @@ internal object BackupStore {
         return mapOf(
             "fokusz_options_v1" to options,
             "fokusz_social_use_v1" to limits,
-            SocialUnlockStore.PREFS to mapOf("selected" to Field({ JSONArray(it as Set<*>) }) { value ->
-                val packages = SocialUnlockStore.supportedPackages
-                stringSet(value as JSONArray, packages.size, packages::contains)
-            }),
+            SocialUnlockStore.PREFS to mapOf(
+                "selected" to Field({ JSONArray(it as Set<*>) }) { value ->
+                    val packages = SocialUnlockStore.supportedPackages
+                    stringSet(value as JSONArray, packages.size, packages::contains)
+                },
+                "jokes" to bool(),
+                "baselineMinutes" to integer(0..1440)
+            ),
             "fokusz_daily_starters_v1" to mapOf("choice0" to integer(0..19), "choice1" to integer(0..19)),
             "fokusz_chess_v2" to accounts,
             "fokusz_calendar_v1" to mapOf("events" to jsonRows(10_000, ::validateCalendarEvent)),

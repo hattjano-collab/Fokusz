@@ -105,7 +105,7 @@ object FocusPrefs {
 
     private fun today() = LocalDate.now().toString()
     @Synchronized fun emergencyAvailable(c: Context): Boolean =
-        sp(c).getString("emergency_date", "") != today()
+        sp(c).getString("emergency_date", "") != today() && !SocialUnlockStore.emergencyUsedToday(c)
     @Synchronized fun activateEmergency(c: Context): Boolean {
         if (!emergencyAvailable(c)) return false
         // Ne lehessen az egyéni quest teljes lezárását feloldani.

@@ -51,12 +51,14 @@ internal fun installedScreenApps(context: Context): List<InstalledApp> {
     var count by rememberSaveable { mutableIntStateOf(30) }
     var edited by remember { mutableStateOf<InstalledApp?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
+    var limitMessage by remember { mutableStateOf("") }
     val apps by produceState(emptyList<InstalledApp>(), context, expanded) {
         if (expanded) value = withContext(Dispatchers.IO) { installedScreenApps(context) }
     }
     Text(if (focus) "Ezek a szabályok a fókuszmódra és az egyedi questekre vonatkoznak. Az Alapértelmezett a tantárgy engedélyeit is figyelembe veszi."
         else "A napi percenkénti korlát és a saját egyenleg fogyasztása egymástól is külön beállítható.")
     Text("A Classroom mindig elérhető.")
+    if (limitMessage.isNotBlank()) Text(limitMessage)
     OutlinedButton(onClick = { expanded = !expanded }) {
         Text(if (expanded) "Alkalmazások elrejtése" else "Telepített alkalmazások")
     }
@@ -110,7 +112,16 @@ internal fun installedScreenApps(context: Context): List<InstalledApp> {
             TextButton(enabled = focus || (value != null && value in 0..1440), onClick = {
                 if (focus) FocusPrefs.setFocusRule(context, app.pkg, rule)
                 else {
-                    SocialUsage.setDailyLimit(context, app.pkg, value ?: return@TextButton)
+                    val requested = value ?: return@TextButton
+                    val old = SocialUsage.dailyLimitMinutes(context, app.pkg)
+                    if (old > 0 && (requested == 0 || requested > old) &&
+                        SocialTeamRequests.guarded(context) && SocialUnlockStore.selected(context, app.pkg)) {
+                        limitMessage = SocialTeamRequests.ask(context, SocialRequestKind.LIMIT,
+                            SocialUnlockStore.app(context, app.pkg), requested, old = old)
+                    } else {
+                        SocialUsage.setDailyLimit(context, app.pkg, requested)
+                        limitMessage = ""
+                    }
                     FocusPrefs.setBlocked(context, app.pkg, charge)
                 }
                 refresh++
