@@ -1,6 +1,4 @@
 <resources>
     <string name="desc">Figyeli, melyik app van előtérben, és blokkolja a figyelemelterelő appokat, ha elfogyott a napi időkeret.</string>
     <string name="widget_desc">Fókusz időegyenleg, XP és napi küldetés</string>
-    <string name="social_window_label">Fókusz – közösségi appok zárolása</string>
-    <string name="social_window_description">A feloldóképernyő megjelenítéséhez csak a megnyitott alkalmazás nevét figyeli.</string>
 </resources>

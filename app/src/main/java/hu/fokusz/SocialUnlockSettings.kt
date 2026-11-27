@@ -1,7 +1,5 @@
 package hu.fokusz
 
-import android.content.Intent
-import android.provider.Settings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -140,11 +138,7 @@ internal fun SocialUnlockSettings() {
         }
         if (showGuide) {
             Text("1. Engedélyezd az alkalmazások feletti megjelenítést és a használati adatokat, majd indítsd el a védelmet ezen a fülön.")
-            Text("2. A gyors zároláshoz az Android hozzáférhetőségi beállításaiban kapcsold be a Fókuszt.")
-            OutlinedButton(onClick = { c.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
-                Text("Android hozzáférhetőségi beállításai")
-            }
-            Text("3. Jelölj ki egy közösségi appot. Próbáld ki először a visszanyilat, majd az idő és az indok megadását.")
+            Text("2. Jelölj ki egy közösségi appot. Próbáld ki először a visszanyilat, majd az idő és az indok megadását.")
             OutlinedButton(onClick = { showApps = true }) { Text("Appok kijelölése") }
             OutlinedButton(onClick = { tryUnlock = true }) { Text("Próbafeloldás megnyitása") }
             if (tryResult.isNotBlank()) Text(tryResult)
