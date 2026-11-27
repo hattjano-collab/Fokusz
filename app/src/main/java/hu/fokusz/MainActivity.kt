@@ -297,7 +297,6 @@ class MainActivity : ComponentActivity() {
     var isRunning by remember { mutableStateOf(FocusService.isRunning) }
     var usageOk by remember { mutableStateOf(UsageGuard.allowed(ctx)) }
     var overlayOk by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
-    var windowProtection by remember { mutableStateOf(SocialForegroundService.connected) }
 
     var minutes by rememberSaveable { mutableStateOf("1") }
     var seconds by rememberSaveable { mutableStateOf("00") }
@@ -329,7 +328,6 @@ class MainActivity : ComponentActivity() {
         while (true) {
             bal = Store.bal(ctx)
             isRunning = FocusService.isRunning
-            windowProtection = SocialForegroundService.connected
             usageOk = UsageGuard.allowed(ctx)
             overlayOk = Settings.canDrawOverlays(ctx)
             delay(1000)
@@ -580,10 +578,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (tab == 0 && (!isRunning || !usageOk || !overlayOk || !windowProtection)) {
+        if (tab == 0 && (!isRunning || !usageOk || !overlayOk)) {
             GlassCard {
-                Text(if (!isRunning || !usageOk || !overlayOk) "A közösségi appok zárolása jelenleg inaktív"
-                    else "A gyors közösségiapp-zárolás jelenleg inaktív", color = Gold)
+                Text("A közösségi appok zárolása jelenleg inaktív", color = Gold)
                 SoftAction("Bekapcsolás", onClick = { tab = 2 })
             }
         }
@@ -804,14 +801,6 @@ class MainActivity : ComponentActivity() {
                 Text("Snapchat  •  Facebook  •  Reddit  •  X", color = White, fontWeight = FontWeight.SemiBold)
                 Text("A napi 30 perc minden figyelt alkalmazásra közös. A játékkal szerzett idő hozzáadódik.",
                     color = Muted, fontSize = 12.sp)
-            }
-            if (!windowProtection) {
-                GlassCard {
-                    Text("A gyors zároláshoz kapcsold be a Fókusz hozzáférhetőségi szolgáltatását. A szolgáltatás csak az aktív alkalmazást azonosítja.")
-                    SoftAction("Ablakfigyelés bekapcsolása", onClick = {
-                        ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    })
-                }
             }
             SocialUnlockSettings()
             FocusSchedulesPanel()

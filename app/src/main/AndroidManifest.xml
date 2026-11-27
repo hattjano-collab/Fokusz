@@ -58,12 +58,6 @@
         <service android:name=".FocusService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started screen-time monitoring and app limit overlay"/>
         </service>
-        <service android:name=".SocialForegroundService" android:exported="true"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:label="@string/social_window_label">
-            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter>
-            <meta-data android:name="android.accessibilityservice" android:resource="@xml/fokusz_window_events"/>
-        </service>
         <receiver android:name=".DuolingoReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="hu.fokusz.DUOLINGO_REMINDER"/>

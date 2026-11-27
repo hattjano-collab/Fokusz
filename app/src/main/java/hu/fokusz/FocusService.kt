@@ -47,11 +47,9 @@ class FocusService : Service() {
     companion object {
         @Volatile var isRunning = false
         private const val CHANNEL = "fokusz-monitor"
+        private const val METER_INTERVAL_MS = 1000L
+        private const val FOREGROUND_POLL_INTERVAL_MS = 250L
         private var running: FocusService? = null
-
-        internal fun windowChanged(pkg: String, activity: String) {
-            running?.foregroundChanged(pkg, activity)
-        }
 
         internal fun refreshUnlocks() { running?.refreshCover() }
     }
@@ -62,7 +60,6 @@ class FocusService : Service() {
     private var currentPackage = ""
     private var resumedPackage = ""
     private var resumedClass: String? = null
-    private var lastWindowTime = 0L
     private var previousPackage = ""
     private var cover: View? = null
     private var coverReason: CoverReason? = null
@@ -87,12 +84,27 @@ class FocusService : Service() {
     private var lastObservedDay: LocalDate? = null
 
     private val pulse = object : Runnable {
+        private var nextMeterAt = 0L
+
         override fun run() {
-            val next = SystemClock.uptimeMillis() + 1000L
-            try { monitor() } catch (_: Exception) { coverAfterFailure() }
+            val now = SystemClock.uptimeMillis()
+            val fastChecks = runCatching { SocialUnlockStore.hasSelectedApps(this@FocusService) && screenAvailable() }
+                .getOrDefault(false)
+            try {
+                if (now >= nextMeterAt) {
+                    nextMeterAt = now + METER_INTERVAL_MS
+                    monitor()
+                } else if (fastChecks) {
+                    pollForeground()
+                }
+            } catch (_: Exception) { coverAfterFailure() }
+            val next = if (fastChecks) minOf(nextMeterAt, now + FOREGROUND_POLL_INTERVAL_MS) else nextMeterAt
             handler.postAtTime(this, next)
         }
     }
+
+    private fun screenAvailable(): Boolean = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive &&
+        getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true
 
     override fun onCreate() {
         super.onCreate()
@@ -155,8 +167,7 @@ class FocusService : Service() {
         handler.removeCallbacks(expiryPulse)
         if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) { stopSelf(); return }
         if (allowCharge) updateBackgroundWork()
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (!pm.isInteractive || getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) {
+        if (!screenAvailable()) {
             teamSession.clear()
             visibleGrant = null
             heardPrelude = ""
@@ -257,7 +268,6 @@ class FocusService : Service() {
         val us = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
         if (lastEventTime > now) lastEventTime = 0L
-        if (lastWindowTime > now) lastWindowTime = 0L
         val window = if (lastEventTime == 0L) 30 * 60_000L else 30_000L
         val windowStart = maxOf(lastEventTime, now - window)
         val events = us.queryEvents(windowStart, now) ?: return
@@ -265,7 +275,7 @@ class FocusService : Service() {
         val previouslySeen = lastEventTime
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
-            if (ev.timeStamp <= previouslySeen || ev.timeStamp < lastWindowTime) continue
+            if (ev.timeStamp <= previouslySeen) continue
             when (ev.eventType) {
                 UsageEvents.Event.ACTIVITY_RESUMED -> setForeground(ev.packageName.orEmpty(), ev.className)
                 UsageEvents.Event.ACTIVITY_PAUSED -> {
@@ -277,12 +287,12 @@ class FocusService : Service() {
         }
     }
 
-    private fun foregroundChanged(pkg: String, activity: String) {
-        if (pkg == currentPackage && activity == resumedClass) return
-        val wasSelected = SocialUnlockStore.selected(this, currentPackage)
-        lastWindowTime = System.currentTimeMillis()
-        setForeground(pkg, activity)
-        if (wasSelected || SocialUnlockStore.selected(this, pkg)) refreshCover()
+    private fun pollForeground() {
+        if (!UsageGuard.allowed(this) || !Settings.canDrawOverlays(this)) return
+        val previous = currentPackage
+        readForeground()
+        if (previous != currentPackage && (SocialUnlockStore.selected(this, previous) ||
+                SocialUnlockStore.selected(this, currentPackage))) refreshCover()
     }
 
     private fun setForeground(pkg: String, activity: String?) {
