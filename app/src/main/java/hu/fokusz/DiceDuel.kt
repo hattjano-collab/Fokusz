@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,16 +45,17 @@ import java.security.SecureRandom
 @Composable fun DiceDuel(stake:Int,enabled:Boolean,onBalanceChange:()->Unit) {
     val context=LocalContext.current
     val random=remember {SecureRandom()}
-    var player by remember {mutableIntStateOf(1)}
-    var dealer by remember {mutableIntStateOf(1)}
-    var rolling by remember {mutableStateOf(false)}
-    var finalPlayer by remember {mutableIntStateOf(1)}
-    var finalDealer by remember {mutableIntStateOf(1)}
-    var round by remember {mutableIntStateOf(0)}
-    var result by remember {mutableStateOf("Mindkét fél egy fair, hatoldalú kockával dob.")}
+    val look = FokuszAppearance.look
+    var player by rememberSaveable {mutableIntStateOf(1)}
+    var dealer by rememberSaveable {mutableIntStateOf(1)}
+    var rolling by rememberSaveable {mutableStateOf(false)}
+    var finalPlayer by rememberSaveable {mutableIntStateOf(1)}
+    var finalDealer by rememberSaveable {mutableIntStateOf(1)}
+    var round by rememberSaveable {mutableIntStateOf(0)}
+    var result by rememberSaveable {mutableStateOf("Mindkét fél egy fair, hatoldalú kockával dob.")}
     val rotate=remember {Animatable(0f)}
     LaunchedEffect(round) {
-        if(round<=0)return@LaunchedEffect
+        if(round<=0 || !rolling)return@LaunchedEffect
         rolling=true
         rotate.snapTo(0f)
         for(i in 1..8) {
@@ -72,36 +74,34 @@ import java.security.SecureRandom
             else -> "Döntetlen: a tét visszajár."
         }
     }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(23.dp))
-        .background(Color(0xFF22253B))
-        .border(1.dp,Color(0xFF33435D),RoundedCornerShape(23.dp))
-        .padding(18.dp),verticalArrangement=Arrangement.spacedBy(13.dp)) {
-        Text("🎲  KOCKAPÁRBAJ",color=Color(0xFFB9AAFF),fontSize=19.sp,
+    FokuszCard {
+        Text("🎲  KOCKAPÁRBAJ",color=look.link,fontSize=19.sp,
             fontWeight=FontWeight.ExtraBold)
         Text("A te kockád az osztó ellen. Nagyobb szám: 2× kifizetés; ugyanannyi: tét vissza; kisebb: tét elvész.",
-            color=Color(0xFFA7B4CC),fontSize=13.sp)
+            color=look.muted,fontSize=13.sp)
         Row(horizontalArrangement=Arrangement.SpaceEvenly,modifier=Modifier.fillMaxWidth()) {
             for((label,number) in listOf("TE" to player,"OSZTÓ" to dealer)) {
                 Column(horizontalAlignment=Alignment.CenterHorizontally,
                     verticalArrangement=Arrangement.spacedBy(7.dp)) {
-                    Text(label,color=Color(0xFFA7B4CC),fontSize=12.sp,fontWeight=FontWeight.Bold)
+                    Text(label,color=look.muted,fontSize=12.sp,fontWeight=FontWeight.Bold)
                     Box(Modifier.size(94.dp)
                         .graphicsLayer{rotationZ=rotate.value%360f}
-                        .clip(RoundedCornerShape(19.dp))
-                        .background(Color(0xFFF5F7FF)),
+                        .clip(look.shape)
+                        .background(look.background)
+                        .border(look.border.dp, look.outline, look.shape),
                         contentAlignment=Alignment.Center) {
                         Text(listOf("⚀","⚁","⚂","⚃","⚄","⚅")[number-1],
-                            color=Color(0xFF152339),fontSize=66.sp)
+                            color=look.foreground,fontSize=66.sp)
                     }
                 }
             }
         }
         Text(if(rolling)"A KOCKÁK GURULNAK…"else result,
-            color=Color(0xFFF5F7FF),fontSize=15.sp,fontWeight=FontWeight.Bold,
+            color=look.foreground,fontSize=15.sp,fontWeight=FontWeight.Bold,
             modifier=Modifier.fillMaxWidth(),textAlign=TextAlign.Center)
-        Button(onClick={
-            if(rolling||!GambleStats.reserve(context,stake))return@Button
-            Store.add(context, -stake, "Kockapárbaj tétje")
+        FokuszAction("Kockák dobása · " + clock(stake), Modifier.fillMaxWidth(), enabled && !rolling) {
+            if (rolling || !GambleStats.reserve(context, stake, "Kockapárbaj tétje")) return@FokuszAction
+            rolling = true
             val x=random.nextInt(6)+1
             val y=random.nextInt(6)+1
             finalPlayer=x
@@ -118,13 +118,8 @@ import java.security.SecureRandom
             GambleStats.record(context,"Kockapárbaj",net)
             onBalanceChange()
             round++
-        },enabled=enabled&&!rolling,modifier=Modifier.fillMaxWidth().height(50.dp),
-            shape=RoundedCornerShape(15.dp),
-            colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFB9AAFF),
-                contentColor=Color(0xFF11172B))) {
-            Text("🎲  KOCKÁK DOBÁSA • "+clock(stake),fontWeight=FontWeight.Bold)
         }
         Text("Valószínűségek: nyerés 15/36 (41,7%), döntetlen 6/36 (16,7%), vereség 15/36 (41,7%). Nincs valódi pénz.",
-            color=Color(0xFFA7B4CC),fontSize=11.sp)
+            color=look.muted,fontSize=11.sp)
     }
 }

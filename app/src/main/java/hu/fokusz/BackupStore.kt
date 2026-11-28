@@ -42,6 +42,9 @@ internal object BackupStore {
         val options = packages.associate { "blocked_$it" to bool() }.toMutableMap()
         options["maximum_seconds"] = integer(1800..21600)
         options["auto_restart"] = bool()
+        options["appearance.theme_id"] = Field { value ->
+            text(value, 16).also { require(it in setOf("rebel", "studio", "night", "play", "sage")) }
+        }
         options["theme"] = Field { value ->
             text(value, 20).also { require(it in setOf("menta", "lila", "arany")) }
         }

@@ -13,7 +13,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +29,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -38,7 +39,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -51,15 +51,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.toArgb
+import androidx.core.view.WindowCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.animation.core.animateIntAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -82,22 +87,23 @@ import java.security.SecureRandom
 import java.util.Locale
 import kotlin.math.abs
 
-private val Midnight = Color(0xFF090F1F)
-private val Panel = Color(0xFF141E32)
-private val Panel2 = Color(0xFF1B2740)
-private var Mint by mutableStateOf(Color(0xFF7BE7C1))
+private val Midnight get() = FokuszAppearance.look.background
+private val Panel get() = FokuszAppearance.look.surface
+private val Panel2 get() = FokuszAppearance.look.hero
+private val Mint get() = FokuszAppearance.look.link
+private var legacyAccent by mutableStateOf(Color(0xFF7BE7C1))
 fun updateFokuszTheme(theme: String) {
-    Mint = when (theme) {
+    legacyAccent = when (theme) {
         "lila" -> Color(0xFFB9AAFF)
         "arany" -> Color(0xFFFFC78D)
         else -> Color(0xFF7BE7C1)
     }
 }
-private val Gold = Color(0xFFFFC78D)
-private val Lilac = Color(0xFFB9AAFF)
-private val Muted = Color(0xFFA7B4CC)
-private val White = Color(0xFFF5F7FF)
-private val Border = Color(0xFF2B3A55)
+private val Gold get() = if (FokuszAppearance.look.dark) Color(0xFFFFC78D) else Color(0xff8a4a18)
+private val Lilac get() = if (FokuszAppearance.look.dark) Color(0xFFB9AAFF) else Color(0xff66478b)
+private val Muted get() = FokuszAppearance.look.muted
+private val White get() = FokuszAppearance.look.foreground
+private val Border get() = FokuszAppearance.look.outline
 
 /** Valódi 52 lapos pakli; kriptográfiailag biztonságos keverés. */
 object Shoe {
@@ -137,7 +143,10 @@ data class Hand(
     val done: Boolean = false,
     val ace: Boolean = false,
     val res: String = ""
-)
+) : java.io.Serializable
+
+private val handsSaver = listSaver<List<Hand>, Hand>(save = { it }, restore = { it.toList() })
+private val dealerSaver = listSaver<List<Int>, Int>(save = { it }, restore = { it.toList() })
 
 class MainActivity : ComponentActivity() {
     private var requestedTab by mutableIntStateOf(-1)
@@ -158,18 +167,19 @@ class MainActivity : ComponentActivity() {
         requestedTab=intent?.getIntExtra("focus_tab",-1) ?: -1
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) quizShare = QuizShare.from(intent)
-        window.statusBarColor = android.graphics.Color.rgb(9,15,31)
-        window.navigationBarColor = android.graphics.Color.rgb(9,15,31)
+        FokuszAppearance.load(this)
         setContent {
-            MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(
-                primary = Mint,
-                onPrimary = Midnight,
-                surface = Panel,
-                background = Midnight,
-                onBackground = White,
-                onSurface = White
-            )) {
-                Surface(color = Midnight, modifier = Modifier.fillMaxSize()) {
+            FokuszTheme {
+                val look = FokuszAppearance.look
+                SideEffect {
+                    window.statusBarColor = look.background.toArgb()
+                    window.navigationBarColor = look.background.toArgb()
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !look.dark
+                        isAppearanceLightNavigationBars = !look.dark
+                    }
+                }
+                Surface(color = look.background, modifier = Modifier.fillMaxSize()) {
                     FokuszApp(requestedTab, tabRequestRevision, quizShare) { received ->
                         if (quizShare?.id == received) quizShare = null
                     }
@@ -186,84 +196,23 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun GlassCard(
-    modifier: Modifier = Modifier,
-    colors: List<Color> = listOf(Panel, Panel),
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Brush.linearGradient(colors))
-            .border(1.dp, Border, RoundedCornerShape(24.dp))
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        content = content
-    )
-}
+@Composable private fun GlassCard(content: @Composable ColumnScope.() -> Unit) = FokuszCard(content = content)
 
-@Composable private fun PrimaryAction(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.height(50.dp),
-        shape = RoundedCornerShape(15.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Mint,
-            contentColor = Midnight,
-            disabledContainerColor = Border,
-            disabledContentColor = Muted
-        )
-    ) { Text(text, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1) }
-}
+@Composable private fun PrimaryAction(text: String, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) =
+    FokuszAction(text, modifier, enabled, onClick = onClick)
 
-@Composable private fun SoftAction(
-    text: String,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    highlight: Boolean = false,
-    onClick: () -> Unit
-) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.height(48.dp),
-        shape = RoundedCornerShape(15.dp),
-        border = BorderStroke(1.dp, if (highlight) Gold else Border),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (highlight) Color(0xFF3C3040) else Panel2,
-            contentColor = if (highlight) Gold else White,
-            disabledContentColor = Muted
-        )
-    ) { Text(text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1) }
-}
+@Composable private fun SoftAction(text: String, enabled: Boolean = true, modifier: Modifier = Modifier,
+                                  highlight: Boolean = false, onClick: () -> Unit) =
+    FokuszAction(text, modifier, enabled, primary = highlight, onClick = onClick)
 
-@Composable private fun TimeHero(balance: Int, compact: Boolean = false) {
-    val animatedBalance by animateIntAsState(targetValue=balance,
-        animationSpec=tween(360),label="Élő időegyenleg")
-    val animatedProgress by animateFloatAsState(
-        targetValue=(balance.toFloat()/Store.DAILY).coerceIn(0f,1f),
-        animationSpec=tween(520),label="Időkeret")
-    GlassCard(colors = listOf(Color(0xFF183D42), Color(0xFF152A3E))) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("◉  IDŐEGYENLEG", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            Spacer(Modifier.weight(1f))
-            Text("● ÉLŐ", color = Mint.copy(alpha = .8f), fontSize = 11.sp)
-        }
-        Text(clock(animatedBalance), color = White, fontWeight = FontWeight.ExtraBold, fontSize = if (compact) 38.sp else 56.sp)
-        Text("Ennyi időd van még a kiválasztott appokra", color = Muted, fontSize = 13.sp)
-        val progress = animatedProgress
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
-            color = Mint,
-            trackColor = Color(0xFF33545C)
-        )
-        Row {
-            Text("Napi alap: 30:00", color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.weight(1f))
-            Text(if (balance > Store.DAILY) "Bónusz időd van" else "Maradék " + clock(balance), color = Mint, fontSize = 12.sp)
+@Composable private fun LegacyPage(content: @Composable ColumnScope.() -> Unit) {
+    MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(
+        primary = legacyAccent, onPrimary = Color(0xff090f1f), surface = Color(0xff141e32),
+        onSurface = Color(0xfff5f7ff), onSurfaceVariant = Color(0xffa7b4cc)
+    ), typography = MaterialTheme.typography, shapes = MaterialTheme.shapes) {
+        Surface(color = Color(0xff141e32), shape = FokuszAppearance.look.shape) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp),
+                content = content)
         }
     }
 }
@@ -273,15 +222,16 @@ class MainActivity : ComponentActivity() {
         modifier
             .clip(RoundedCornerShape(16.dp))
             .background(if (selected) Panel2 else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp, horizontal = 6.dp),
+            .selectable(selected, role = Role.Tab, onClick = onClick)
+            .heightIn(min = 50.dp).padding(vertical = 6.dp, horizontal = 3.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(symbol + "  " + title,
-            fontSize = 11.sp,
-            color = if (selected) Mint else Muted,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(symbol, color = if (selected) Mint else Muted, fontSize = 14.sp)
+            Text(title, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center,
+                color = if (selected) Mint else Muted,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+        }
     }
 }
 
@@ -309,24 +259,25 @@ class MainActivity : ComponentActivity() {
         proposedStake.toInt()else 0
     val wagerValid = stake > 0 && stake <= bal && GambleStats.canBet(ctx, stake)
 
-    var selectedSide by remember { mutableStateOf("") }
-    var coinResult by remember { mutableStateOf("") }
-    var coinNote by remember { mutableStateOf("Válassz egy oldalt a dobáshoz!") }
-    var coinWon by remember { mutableStateOf<Boolean?>(null) }
+    var selectedSide by rememberSaveable { mutableStateOf("") }
+    var coinResult by rememberSaveable { mutableStateOf("") }
+    var coinNote by rememberSaveable { mutableStateOf("Válassz egy oldalt a dobáshoz!") }
+    var coinWon by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var coinFlipping by remember { mutableStateOf(false) }
     var flipCounter by remember { mutableStateOf(0) }
     val coinRotation = remember { Animatable(0f) }
     val coinLift = remember { Animatable(0f) }
 
-    var bjMessage by remember { mutableStateOf("Válassz tétet, majd kezdj egy új kört.") }
-    var hands by remember { mutableStateOf(listOf<Hand>()) }
-    var dealer by remember { mutableStateOf(listOf<Int>()) }
-    var active by remember { mutableStateOf(0) }
-    var live by remember { mutableStateOf(false) }
+    var bjMessage by rememberSaveable { mutableStateOf("Válassz tétet, majd kezdj egy új kört.") }
+    var hands by rememberSaveable(stateSaver = handsSaver) { mutableStateOf(listOf<Hand>()) }
+    var dealer by rememberSaveable(stateSaver = dealerSaver) { mutableStateOf(listOf<Int>()) }
+    var active by rememberSaveable { mutableStateOf(0) }
+    var live by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
             bal = Store.bal(ctx)
+            WeeklyWallet.pulse(ctx)
             isRunning = FocusService.isRunning
             usageOk = UsageGuard.allowed(ctx)
             overlayOk = Settings.canDrawOverlays(ctx)
@@ -370,6 +321,7 @@ class MainActivity : ComponentActivity() {
     }
 
     fun finish(hs: List<Hand>) {
+        if (!live) return
         val dc = dealer.toMutableList()
         if (hs.any { value(it.cards) <= 21 }) while (value(dc) < 17) dc.add(Shoe.draw())
         dealer = dc
@@ -410,10 +362,9 @@ class MainActivity : ComponentActivity() {
     }
 
     fun deal() {
-        if (!wagerValid || live) return
+        if (!wagerValid || live || coinFlipping) return
         val bet = stake
-        if(!GambleStats.reserve(ctx,bet))return
-        Store.add(ctx, -bet, "Blackjack tétje")
+        if (!GambleStats.reserve(ctx, bet, "Blackjack tétje")) return
         val player = listOf(Shoe.draw(), Shoe.draw())
         val dc = listOf(Shoe.draw(), Shoe.draw())
         dealer = dc
@@ -443,22 +394,24 @@ class MainActivity : ComponentActivity() {
     fun replaceHand(h: Hand): List<Hand> =
         hands.toMutableList().also { it[active] = h }
     fun hit() {
+        if (!live) return
         val h = hands[active]
         val cs = h.cards + Shoe.draw()
         next(replaceHand(h.copy(cards = cs, done = value(cs) >= 21)))
     }
-    fun stand() { next(replaceHand(hands[active].copy(done = true))) }
+    fun stand() { if (live) next(replaceHand(hands[active].copy(done = true))) }
     fun doubleDown() {
+        if (!live) return
         val h = hands[active]
-        if (bal < h.bet || h.bet>Store.MAX_SAFE_SECONDS/2 || !GambleStats.reserve(ctx,h.bet)) return
-        Store.add(ctx, -h.bet, "Blackjack duplázás tétje")
+        if (h.cards.size != 2 || h.bet > Store.MAX_SAFE_SECONDS / 2 ||
+            !GambleStats.reserve(ctx, h.bet, "Blackjack duplázás tétje")) return
         next(replaceHand(h.copy(cards = h.cards + Shoe.draw(), bet = h.bet * 2, done = true)))
     }
     fun split() {
+        if (!live) return
         val h = hands[active]
-        if (bal < h.bet || hands.size >= 4 || h.cards.size != 2 || rv(h.cards[0]) != rv(h.cards[1])) return
-        if(!GambleStats.reserve(ctx,h.bet))return
-        Store.add(ctx, -h.bet, "Blackjack osztás tétje")
+        if (hands.size >= 4 || h.ace || h.cards.size != 2 || rv(h.cards[0]) != rv(h.cards[1])) return
+        if (!GambleStats.reserve(ctx, h.bet, "Blackjack osztás tétje")) return
         val ace = h.cards[0] % 13 == 0
         val a = Hand(listOf(h.cards[0], Shoe.draw()), h.bet, done = ace, ace = ace)
         val b = Hand(listOf(h.cards[1], Shoe.draw()), h.bet, done = ace, ace = ace)
@@ -477,6 +430,9 @@ class MainActivity : ComponentActivity() {
 
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
+    val pageScroll = rememberScrollState()
+    var gameChoice by rememberSaveable { mutableIntStateOf(0) }
+    val gamePositions = remember { IntArray(3) }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -517,21 +473,27 @@ class MainActivity : ComponentActivity() {
             }
         }
     ) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
-            .verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 20.dp),
+        Modifier.weight(1f).fillMaxWidth()
+            .verticalScroll(pageScroll).padding(horizontal = 20.dp, vertical = 17.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(45.dp).clip(RoundedCornerShape(14.dp))
-                .background(Brush.linearGradient(listOf(Mint, Color(0xFF3AAEAD)))),
+            Box(Modifier.size(45.dp).clip(FokuszAppearance.look.shape)
+                .background(FokuszAppearance.look.accent),
                 contentAlignment = Alignment.Center) {
-                Text("◈", fontSize = 30.sp, color = Midnight, fontWeight = FontWeight.Black)
+                Text("◈", fontSize = 28.sp, color = FokuszAppearance.look.onAccent, fontWeight = FontWeight.Black)
             }
             Spacer(Modifier.size(12.dp))
             Column {
-                Text("FÓKUSZ", color = White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
-                Text("A te időd. A te szabályaid.", color = Muted, fontSize = 12.sp)
+                Text("Fókusz", color = White, style = MaterialTheme.typography.headlineMedium)
+                androidx.compose.material3.TextButton(onClick = {
+                    val next = (FokuszAppearance.look.ordinal + 1) % FokuszLook.entries.size
+                    FokuszAppearance.choose(ctx, FokuszLook.entries[next])
+                }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Dizájn váltása", color = Mint, style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
 
@@ -549,11 +511,11 @@ class MainActivity : ComponentActivity() {
                 color=White,fontWeight=FontWeight.Bold, fontSize=15.sp)
         }
 
-        if(tab == 0 || tab == 1 || tab == 3) {
+        if(tab == 1 || tab == 3) {
             Row(
                 Modifier.fillMaxWidth().animateContentSize().clip(RoundedCornerShape(17.dp))
                     .background(Brush.horizontalGradient(
-                        listOf(Color(0xFF203E47),Color(0xFF262C46))))
+                        listOf(Panel, Panel2)))
                     .border(1.dp,Color(0xFF395B65),RoundedCornerShape(17.dp))
                     .padding(horizontal=13.dp,vertical=11.dp),
                 verticalAlignment=Alignment.CenterVertically,
@@ -586,8 +548,19 @@ class MainActivity : ComponentActivity() {
         }
 
         if (tab == 0) {
-            TimeHero(bal, compact = true)
-            SectionLabel("Játssz az időddel", "Nincs valódi pénz — minden tét időegység.")
+            FokuszHeading("Játék a saját időddel", "Gambling")
+            FokuszCard(color = FokuszAppearance.look.hero) {
+                Text("Játékra elérhető saját idő", color = Muted)
+                LargeTime(bal, size = 50)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Érmedobás", "Kockapárbaj", "Blackjack").forEachIndexed { index, title ->
+                    NavTab(title, listOf("◉", "⚄", "♠")[index], gameChoice == index, Modifier.weight(1f)) {
+                        gameChoice = index
+                        drawerScope.launch { pageScroll.animateScrollTo(gamePositions[index].coerceAtLeast(0)) }
+                    }
+                }
+            }
             GlassCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("TÉT BEÁLLÍTÁSA", color = Muted, fontSize = 12.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold)
@@ -658,7 +631,7 @@ class MainActivity : ComponentActivity() {
                 if (live) Text("A tét egy blackjack-kör közben nem módosítható.", color = Muted, fontSize = 12.sp)
             }
 
-            GlassCard(colors = listOf(Color(0xFF332941), Panel)) {
+            FokuszCard(Modifier.onGloballyPositioned { gamePositions[0] = it.positionInParent().y.toInt() }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("🪙  ÉRMEDOBÁS", color = Gold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     Spacer(Modifier.weight(1f))
@@ -686,9 +659,11 @@ class MainActivity : ComponentActivity() {
                     color = Muted, fontSize = 11.sp)
             }
 
-            DiceDuel(stake=stake,enabled=betEnabled) { bal=Store.bal(ctx) }
+            Box(Modifier.onGloballyPositioned { gamePositions[1] = it.positionInParent().y.toInt() }) {
+                DiceDuel(stake = stake, enabled = betEnabled) { bal = Store.bal(ctx) }
+            }
 
-            GlassCard(colors = listOf(Color(0xFF242741), Panel)) {
+            FokuszCard(Modifier.onGloballyPositioned { gamePositions[2] = it.positionInParent().y.toInt() }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("♠  BLACKJACK", color = Lilac, fontWeight = FontWeight.Bold, fontSize = 19.sp)
                     Spacer(Modifier.weight(1f))
@@ -714,7 +689,7 @@ class MainActivity : ComponentActivity() {
                         val selected = live && active == i && !h.done
                         Column(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(17.dp))
-                                .background(if (selected) Color(0xFF27423F) else Color(0xFF202B40))
+                                .background(if (selected) Panel2 else Panel)
                                 .border(1.dp, if (selected) Mint else Border, RoundedCornerShape(17.dp))
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -747,12 +722,11 @@ class MainActivity : ComponentActivity() {
                 Text("Split: azonos értékű kártyáknál, legfeljebb 4 kézig. Az új kézhez külön fedezet kell.",
                     color = Muted, fontSize = 11.sp)
             }
-            GamblingSummaryPanel(GambleStats.staked(ctx))
+            LegacyPage { GamblingSummaryPanel(GambleStats.staked(ctx)) }
         } else if (tab == 1) {
-            QuestPanel(isRunning, usageOk, overlayOk, { tab = 2 }, { tab = 6 })
+            LegacyPage { QuestPanel(isRunning, usageOk, overlayOk, { tab = 2 }, { tab = 6 }) }
         } else if (tab == 2) {
-            SectionLabel("Képernyőidő", "Az időkereted, engedélyeid és védelmed.")
-            TimeHero(bal)
+            ScreenTimeOverview(bal, isRunning && usageOk && overlayOk, { tab = 12 }, { tab = 6 })
             GlassCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("VÉDELEM ÁLLAPOTA", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -802,42 +776,52 @@ class MainActivity : ComponentActivity() {
                 Text("A napi 30 perc minden figyelt alkalmazásra közös. A játékkal szerzett idő hozzáadódik.",
                     color = Muted, fontSize = 12.sp)
             }
-            SocialUnlockSettings()
-            FocusSchedulesPanel()
-            ScreenTimePanel()
+            LegacyPage {
+                SocialUnlockSettings()
+                FocusSchedulesPanel()
+                ScreenTimePanel()
+            }
             GlassCard {
                 Text("TIPP XIAOMI TELEFONHOZ", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text("A stabil háttérfigyeléshez állíts be korlátozás nélküli akkumulátorhasználatot a Fókusz alkalmazásinformációs oldalán.",
                     color = Muted, fontSize = 13.sp)
-                Text("Minden adat helyben marad a telefonon. A Fókusz nem használ valódi pénzt.",
+                Text("A heti elszámolás a saját időegyenleget és a választást szinkronizálja a Firebase-szerverrel.",
                     color = Muted, fontSize = 12.sp)
             }
         } else if (tab == 3) {
-            StatsPanel()
+            LegacyPage { StatsPanel() }
         } else if (tab == 4) {
-            CoachPanel()
+            LegacyPage { CoachPanel() }
         } else if (tab == 5) {
-            FocusPanel(isRunning, usageOk, overlayOk) { tab = 2 }
+            LegacyPage { FocusPanel(isRunning, usageOk, overlayOk) { tab = 2 } }
         } else if (tab == 6) {
-            OptionsPanel()
+            ThemePicker()
+            LegacyPage { OptionsPanel() }
         } else if (tab == 7) {
-            CalendarPanel()
+            LegacyPage { CalendarPanel() }
         } else if(tab == 8) {
-            DuolingoPanel()
+            LegacyPage { DuolingoPanel() }
         }
         else if(tab==9) {
-            CloudTeamPanel()
+            WeeklySettlementPanel()
+            LegacyPage { CloudTeamPanel() }
         } else if(tab==10) {
-            XeropanPanel()
+            LegacyPage { XeropanPanel() }
         } else if(tab==11) {
-            QuizPhotoPanel(quizShare, onShareConsumed)
+            LegacyPage { QuizPhotoPanel(quizShare, onShareConsumed) }
         } else if(tab==12) {
-            TimeBankPanel()
+            TimeBankPanel { tab = 9 }
         }
         Spacer(Modifier.height(14.dp))
         Text("FÓKUSZ  •  $version", color = Muted.copy(alpha = .6f),
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
+    }
+    Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 8.dp, vertical = 4.dp)) {
+        for ((id, symbol, title) in listOf(Triple(2,"◷","Képernyőidő"), Triple(0,"♠","Gambling"), Triple(12,"▤","Időbank"))) {
+            NavTab(title, symbol, tab == id, Modifier.weight(1f)) { tab = id }
+        }
+    }
     }
     }
 }
@@ -847,7 +831,7 @@ class MainActivity : ComponentActivity() {
     val suitRed = front && card!! / 13 in listOf(1,2)
     Column(
         Modifier.size(width = 45.dp, height = 62.dp).clip(RoundedCornerShape(8.dp))
-            .background(if (front) White else Color(0xFF5861A8))
+            .background(if (front) Color(0xfff5f7ff) else Color(0xFF5861A8))
             .border(1.dp, if (front) Color(0xFFDDE3F0) else Lilac, RoundedCornerShape(8.dp)),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
