@@ -415,6 +415,7 @@ private val C = Color(0xFF273750)
         }
         FeatureCard("BIZTONSÁGI MENTÉS") {
             BackupPanel {
+                FokuszAppearance.load(ctx)
                 updateFokuszTheme(FocusPrefs.theme(ctx))
                 refresh++
                 restored++

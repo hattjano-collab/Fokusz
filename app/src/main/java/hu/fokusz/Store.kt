@@ -179,12 +179,27 @@ object Store {
 
     @Synchronized fun bal(c: Context): Int {
         val settings = sp(c)
-        val today = LocalDate.now()
+        val today = WeeklyWalletClock.today()
         val previous = settings.getString("d", null)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         if (previous != null && previous >= today) return settings.getInt("b", DAILY)
         val oldBalance = settings.getInt("b", 0)
         var bank = TimeBank.read(c, settings, previous ?: today)
-        if (previous != null) {
+        val closingWeek = previous?.let(WeeklyWalletClock::monday)
+        val cutoff = closingWeek?.plusWeeks(1)
+        val shouldHold = closingWeek != null && cutoff != null && today >= cutoff &&
+            settings.getString("weekly_active", null) == closingWeek.toString()
+        val held = if (shouldHold) {
+            val closedDay = checkNotNull(previous)
+            val sunday = checkNotNull(cutoff).minusDays(1)
+            val oldBank = bank.advance(closedDay)
+            if (closedDay < sunday) {
+                val closed = oldBank.addRemainder(oldBalance).advance(sunday)
+                closed.ready.toLong() + closed.pending
+            } else oldBank.ready.toLong() + oldBank.pending + oldBalance
+        } else null
+        if (held != null) {
+            bank = TimeBankState(today, 0, 0, 0)
+        } else if (previous != null) {
             bank = bank.advance(previous)
             if (bank.day < today) {
                 bank = bank.addRemainder(oldBalance)
@@ -197,8 +212,9 @@ object Store {
         bank = bank.advance(today)
         val editor = settings.edit().putString("d", today.toString()).putInt("b", DAILY).remove(WALLET_DEBITS)
         TimeBank.write(editor, bank)
+        if (held != null) editor.putLong("weekly_hold_$closingWeek", held)
         if (!editor.commit()) return settings.getInt("b", DAILY)
-        if (previous != null && oldBalance > 0) ScreenTimeLedger.record(c, "Napi maradék átvezetése a bankba", -oldBalance)
+        if (held == null && previous != null && oldBalance > 0) ScreenTimeLedger.record(c, "Napi maradék átvezetése a bankba", -oldBalance)
         ScreenTimeLedger.record(c, "Napi alapkeret", DAILY)
         return DAILY
     }
@@ -206,8 +222,8 @@ object Store {
     @Synchronized internal fun bank(c: Context): TimeBankState {
         bal(c)
         val settings = sp(c)
-        val state = TimeBank.read(c, settings, LocalDate.now())
-        val rolled = state.advance(LocalDate.now())
+        val state = TimeBank.read(c, settings, WeeklyWalletClock.today())
+        val rolled = state.advance(WeeklyWalletClock.today())
         if (rolled != state || !TimeBank.migrated(settings)) {
             val edit = settings.edit()
             TimeBank.write(edit, rolled)
@@ -215,6 +231,56 @@ object Store {
         }
         return rolled
     }
+
+    @Synchronized internal fun weeklySnapshot(c: Context): Pair<Int, Int> {
+        val wallet = bal(c)
+        val savings = bank(c)
+        return wallet to (savings.ready.toLong() + savings.pending).coerceAtMost(MAX_SAFE_SECONDS.toLong()).toInt()
+    }
+
+    @Synchronized internal fun registerWeeklyPeriod(c: Context, week: String) {
+        val day = runCatching { LocalDate.parse(week) }.getOrNull() ?: return
+        if (day != WeeklyWalletClock.monday(day)) return
+        val p = sp(c)
+        if (p.getString("weekly_active", null) != week) p.edit().putString("weekly_active", week).commit()
+    }
+
+    @Synchronized internal fun applyWeeklyReceipt(c: Context, result: WeeklyReceipt): Boolean {
+        val week = runCatching { LocalDate.parse(result.week) }.getOrNull() ?: return false
+        if (week.plusWeeks(1) > WeeklyWalletClock.today()) return false
+        if (result.closing !in 0L..MAX_SAFE_SECONDS.toLong() * 2 ||
+            result.retainedTenths !in 0L..result.closing * 10L) return false
+        val wallet = bal(c)
+        val savings = bank(c)
+        val p = sp(c)
+        val holdKey = "weekly_hold_${result.week}"
+        if (!p.contains(holdKey)) return false
+        val frozen = p.getLong(holdKey, 0L)
+        val assessedLoss = result.closing * 10L - result.retainedTenths
+        val afterLoss = (frozen * 10L - assessedLoss).coerceAtLeast(0L)
+        val interestBase = (afterLoss / 10L).coerceAtMost(MAX_SAFE_SECONDS.toLong()).toInt()
+        val matured = TimeBankState(week.plusDays(6), interestBase, 0, 0).advance(WeeklyWalletClock.today())
+        val weeklyInterest = matured.ready.toLong() - interestBase
+        val pending = afterLoss + weeklyInterest * 10L + p.getLong("weekly_remainder_tenths", 0L)
+        val bankCapacity = MAX_SAFE_SECONDS - savings.ready - savings.pending
+        val addedBank = minOf(bankCapacity.toLong(), pending / 10L).toInt()
+        val addedWallet = minOf((MAX_SAFE_SECONDS - wallet).toLong(), pending / 10L - addedBank).toInt()
+        val editor = p.edit().remove(holdKey).putInt("b", wallet + addedWallet)
+            .putLong("weekly_applied_${result.week}", afterLoss)
+            .putLong("weekly_remainder_tenths", pending - (addedBank.toLong() + addedWallet) * 10L)
+        val creditedInterest = minOf(weeklyInterest, addedBank.toLong()).toInt()
+        val todayInterest = minOf(matured.interest, creditedInterest)
+        TimeBank.write(editor, savings.copy(ready = savings.ready + addedBank,
+            interest = (savings.interest.toLong() + todayInterest).coerceAtMost(MAX_SAFE_SECONDS.toLong()).toInt()))
+        if (!editor.commit()) return false
+        ScreenTimeLedger.record(c, "Heti megtartás", addedBank - creditedInterest)
+        ScreenTimeLedger.record(c, "Heti megtartás bankkamata", creditedInterest)
+        ProgressStore.updateWidget(c)
+        return true
+    }
+
+    internal fun weeklyAppliedTenths(c: Context, week: String): Long? =
+        sp(c).getLong("weekly_applied_$week", -1L).takeIf { it >= 0L }
 
     internal fun transferBank(c: Context, seconds: Int, deposit: Boolean): Boolean {
         synchronized(this) {

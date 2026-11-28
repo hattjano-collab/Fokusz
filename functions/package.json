@@ -1,0 +1,9 @@
+{
+  "name": "fokusz-weekly-settlement",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "engines": {"node": "22"},
+  "scripts": {"test": "node --test"},
+  "dependencies": {"firebase-admin": "^13.4.0", "firebase-functions": "^6.4.0"}
+}

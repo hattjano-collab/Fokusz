@@ -242,6 +242,7 @@ class FocusService : Service() {
         TeamVoiceGate.watch(this)
         UserQuests.tick(this)
         CloudTeams.pulse(this)
+        WeeklyWallet.pulse(this)
         val elapsed=SystemClock.elapsedRealtime()
         if(elapsed-lastNotification>=20000L) {
             lastNotification=elapsed

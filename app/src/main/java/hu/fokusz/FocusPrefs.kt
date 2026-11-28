@@ -100,6 +100,10 @@ object FocusPrefs {
     fun setAutoRestart(c:Context,enabled:Boolean) {
         sp(c).edit().putBoolean("auto_restart",enabled).apply()
     }
+    internal fun appearance(c: Context) = sp(c).getString("appearance.theme_id", null)
+    internal fun setAppearance(c: Context, id: String) {
+        sp(c).edit().putString("appearance.theme_id", id).apply()
+    }
     fun theme(c: Context) = sp(c).getString("theme", "menta") ?: "menta"
     fun setTheme(c: Context, value: String) { sp(c).edit().putString("theme", value).apply() }
 
